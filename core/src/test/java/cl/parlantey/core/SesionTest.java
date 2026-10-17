@@ -76,9 +76,16 @@ public class SesionTest {
         final AtomicLong bytesOyente = new AtomicLong(-1);
         final AtomicLong msOyente = new AtomicLong(-1);
         arrancarReceptor(s -> SesionReceptor.atender(s.getInputStream(), s.getOutputStream(), HELLO,
-                (bytesRecibidos, duracionMs) -> {
-                    bytesOyente.set(bytesRecibidos);
-                    msOyente.set(duracionMs);
+                new SesionReceptor.Oyente() {
+                    @Override
+                    public void pruebaTerminada(long bytesRecibidos, long duracionMs) {
+                        bytesOyente.set(bytesRecibidos);
+                        msOyente.set(duracionMs);
+                    }
+
+                    @Override
+                    public void track(Track track) {
+                    }
                 }));
 
         SesionEmisor sesion = conectar();
@@ -118,8 +125,8 @@ public class SesionTest {
         arrancarReceptor(s -> SesionReceptor.atender(s.getInputStream(), s.getOutputStream(), HELLO, null));
         SesionEmisor sesion = conectar();
         sesion.esperarHello();
-        // Una trama de un tipo futuro (CONFIG, 0x02) con payload arbitrario.
-        cliente.getOutputStream().write(new byte[] {0x50, 0x59, 0x02, 0x00, 0, 0, 0, 3, 1, 2, 3});
+        // Una trama de un tipo futuro (0x7F) con payload arbitrario.
+        cliente.getOutputStream().write(new byte[] {0x50, 0x59, 0x7F, 0x00, 0, 0, 0, 3, 1, 2, 3});
         assertTrue(sesion.ping() > 0);
         sesion.despedir(Protocolo.BYE_NORMAL);
         assertEquals(Protocolo.BYE_NORMAL, esperarReceptor());
@@ -136,7 +143,7 @@ public class SesionTest {
                 assertEquals(Protocolo.PING, l.leer());
                 long t = l.datos().readLong();
                 e.pong(t - 1); // PONG de un PING anterior: debe descartarse
-                s.getOutputStream().write(new byte[] {0x50, 0x59, 0x06, 0x00, 0, 0, 0, 2, 7, 7}); // tipo futuro
+                s.getOutputStream().write(new byte[] {0x50, 0x59, 0x7E, 0x00, 0, 0, 0, 2, 7, 7}); // tipo futuro
                 e.pong(t);
             }
             long bytes = 0;
@@ -242,5 +249,140 @@ public class SesionTest {
         } catch (ProtocoloException esperada) {
             assertTrue(esperada.getMessage().contains("HELLO"));
         }
+    }
+
+    @Test(timeout = 20000)
+    public void stateIntercaladoConPongYResultado() throws Exception {
+        arrancarReceptor(s -> {
+            EscritorTramas e = new EscritorTramas(s.getOutputStream());
+            LectorTramas l = new LectorTramas(s.getInputStream());
+            e.hello(HELLO);
+            for (int i = 0; i < 2; i++) { // ping() y el PING de probarEnlace(1, ...)
+                assertEquals(Protocolo.PING, l.leer());
+                long t = l.datos().readLong();
+                e.state(100 + i, 0, 7, true);
+                e.pong(t - 1);
+                e.state(200 + i, 0, 7, true);
+                e.pong(t);
+            }
+            long bytes = 0;
+            while (true) {
+                assertEquals(Protocolo.TEST_DATA, l.leer());
+                bytes += Protocolo.LARGO_CABECERA + l.largo();
+                if ((l.flags() & Protocolo.FLAG_ULTIMA) != 0) {
+                    break;
+                }
+            }
+            e.state(300, 1, 8, false);
+            e.testResult(bytes, 42);
+            e.state(400, 2, 9, true);
+            assertEquals(Protocolo.BYE, l.leer());
+            return l.datos().readUnsignedByte();
+        });
+        SesionEmisor sesion = conectar();
+        sesion.esperarHello();
+        assertNull(sesion.estado());
+        assertTrue(sesion.ping() > 0);
+        ResultadoPrueba r = sesion.probarEnlace(1, 20, 100);
+        assertEquals(r.bytesEnviados, r.bytesRecibidos);
+        assertEquals(42, r.duracionReceptorMs);
+        while (sesion.estadosRecibidos() < 6) {
+            sesion.esperarEstado(1000);
+        }
+        Estado e = sesion.estado();
+        assertEquals(400, e.bufferMs);
+        assertEquals(2, e.cortes);
+        assertEquals(9, e.ultimoSeq);
+        assertTrue(e.reproduciendo);
+        assertTrue(sesion.ultimoRttNs() > 0);
+        sesion.despedir(Protocolo.BYE_NORMAL);
+        assertEquals(Protocolo.BYE_NORMAL, esperarReceptor());
+        sesion.cerrar();
+    }
+
+    @Test(timeout = 20000)
+    public void watchdogDelEmisorConRelojVirtual() throws Exception {
+        final java.util.concurrent.CountDownLatch enviarState = new java.util.concurrent.CountDownLatch(1);
+        arrancarReceptor(s -> {
+            EscritorTramas e = new EscritorTramas(s.getOutputStream());
+            e.hello(HELLO);
+            enviarState.await();
+            e.state(0, 0, Protocolo.SEQ_NINGUNO, false);
+            new LectorTramas(s.getInputStream()).leer(); // hasta que el emisor cierre
+            return null;
+        });
+        final long[] ahora = {1000 * SesionEmisor.LIMITE_SILENCIO_NS};
+        cliente = new Socket(InetAddress.getLoopbackAddress(), servidor.getLocalPort());
+        SesionEmisor sesion = new SesionEmisor(cliente.getInputStream(), cliente.getOutputStream(), () -> ahora[0]);
+        assertTrue("antes del HELLO no vence", !sesion.vencida(Long.MAX_VALUE));
+        sesion.esperarHello();
+        long t0 = ahora[0];
+        assertTrue(!sesion.vencida(t0 + SesionEmisor.LIMITE_SILENCIO_NS));
+        assertTrue(sesion.vencida(t0 + SesionEmisor.LIMITE_SILENCIO_NS + 1));
+        ahora[0] = t0 + 3 * SesionEmisor.LIMITE_SILENCIO_NS;
+        enviarState.countDown();
+        assertTrue(sesion.esperarEstado(5000));
+        assertEquals(ahora[0], sesion.nanosUltimaTrama());
+        assertTrue("una trama nueva reinicia el watchdog", !sesion.vencida(ahora[0] + 1));
+        sesion.cerrar();
+        assertTrue(sesion.cerrada());
+        esperarReceptor();
+    }
+
+    @Test(timeout = 20000)
+    public void byeDuranteLaEsperaDeStateSeRelanza() throws Exception {
+        arrancarReceptor(s -> {
+            EscritorTramas e = new EscritorTramas(s.getOutputStream());
+            e.hello(HELLO);
+            e.state(10, 0, 0, true);
+            e.bye(Protocolo.BYE_NORMAL);
+            return null;
+        });
+        SesionEmisor sesion = conectar();
+        sesion.esperarHello();
+        try {
+            for (int i = 0; i < 50; i++) {
+                sesion.esperarEstado(200);
+            }
+            fail("debió lanzar ByeRecibidoException");
+        } catch (ByeRecibidoException e) {
+            assertEquals(Protocolo.BYE_NORMAL, e.codigo);
+        }
+        assertTrue(sesion.causa() instanceof ByeRecibidoException);
+        assertEquals(10, sesion.estado().bufferMs); // el último STATE sigue disponible
+        try {
+            sesion.ping();
+            fail("la sesión ya terminó");
+        } catch (ByeRecibidoException esperada) {
+            // bien
+        }
+        sesion.cerrar();
+        assertNull(esperarReceptor());
+    }
+
+    @Test(timeout = 20000)
+    public void cerrarDesbloqueaAlLector() throws Exception {
+        arrancarReceptor(s -> {
+            new EscritorTramas(s.getOutputStream()).hello(HELLO);
+            try {
+                new LectorTramas(s.getInputStream()).leer();
+            } catch (IOException fin) {
+                // el emisor cerró
+            }
+            return null;
+        });
+        SesionEmisor sesion = conectar();
+        sesion.esperarHello();
+        long t = System.nanoTime();
+        sesion.cerrar();
+        assertTrue("cerrar no debe esperar", System.nanoTime() - t < 2000000000L);
+        assertTrue(sesion.causa() != null);
+        try {
+            sesion.esperarEstado(10);
+            fail("la sesión está cerrada");
+        } catch (IOException esperada) {
+            // bien
+        }
+        assertNull(esperarReceptor());
     }
 }

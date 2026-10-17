@@ -3,17 +3,15 @@ package cl.parlantey.emisor
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
-import cl.parlantey.core.Hello
 import cl.parlantey.core.Protocolo
-import cl.parlantey.core.ResultadoPrueba
 import cl.parlantey.core.SesionEmisor
 import java.io.IOException
 
 /**
- * Conexión RFCOMM con el receptor. Todas las llamadas bloquean: usarlas desde un hilo de E/S.
- * Para cortar una llamada bloqueada desde otro hilo, usar [cerrar] o [cerrarPorTiempo].
+ * Socket RFCOMM con el receptor. [conectar] bloquea: usarlo desde un hilo de E/S. Para cortar
+ * una llamada bloqueada desde otro hilo, usar [cerrar] o [cerrarPorTiempo].
  */
-@SuppressLint("MissingPermission") // EmisorViewModel solo la crea con BLUETOOTH_CONNECT concedido.
+@SuppressLint("MissingPermission") // el servicio solo la crea con BLUETOOTH_CONNECT concedido.
 class ConexionReceptor(private val dispositivo: BluetoothDevice) {
 
     @Volatile private var socket: BluetoothSocket? = null
@@ -24,14 +22,21 @@ class ConexionReceptor(private val dispositivo: BluetoothDevice) {
     @Volatile var vencida = false
         private set
 
-    /** Abre el socket: primero la variante segura y, si falla, la insecure. */
-    fun conectar() {
+    /** true si el socket abierto es la variante insecure. */
+    var insecure = false
+        private set
+
+    /**
+     * Abre el socket: primero la variante que funcionó la última vez (la segura salvo que
+     * [insecurePrimero]) y, si falla, la otra. Después, [insecure] dice cuál quedó.
+     */
+    fun conectar(insecurePrimero: Boolean) {
         val s = try {
-            abrir(segura = true)
+            abrir(insecure = insecurePrimero)
         } catch (e: IOException) {
             if (cerrada) throw e
             try {
-                abrir(segura = false)
+                abrir(insecure = !insecurePrimero)
             } catch (e2: IOException) {
                 e2.addSuppressed(e)
                 throw e2
@@ -40,11 +45,11 @@ class ConexionReceptor(private val dispositivo: BluetoothDevice) {
         sesion = SesionEmisor(s.inputStream, s.outputStream)
     }
 
-    private fun abrir(segura: Boolean): BluetoothSocket {
-        val s = if (segura) {
-            dispositivo.createRfcommSocketToServiceRecord(Protocolo.UUID_SERVICIO)
-        } else {
+    private fun abrir(insecure: Boolean): BluetoothSocket {
+        val s = if (insecure) {
             dispositivo.createInsecureRfcommSocketToServiceRecord(Protocolo.UUID_SERVICIO)
+        } else {
+            dispositivo.createRfcommSocketToServiceRecord(Protocolo.UUID_SERVICIO)
         }
         socket = s
         if (cerrada) {
@@ -53,6 +58,7 @@ class ConexionReceptor(private val dispositivo: BluetoothDevice) {
         }
         try {
             s.connect()
+            this.insecure = insecure
             return s
         } catch (e: IOException) {
             cerrarSilencioso(s)
@@ -60,37 +66,20 @@ class ConexionReceptor(private val dispositivo: BluetoothDevice) {
         }
     }
 
-    fun esperarHello(): Hello = sesionAbierta().esperarHello()
-
-    /** RTT de un PING/PONG, en nanosegundos. */
-    fun ping(): Long = sesionAbierta().ping()
-
-    fun probarEnlace(): ResultadoPrueba =
-        sesionAbierta().probarEnlace(PINGS_PRUEBA, DURACION_PRUEBA_MS, SesionEmisor.LARGO_TRAMA_PRUEBA)
-
-    /** Envía BYE si todavía se puede y cierra. */
-    fun despedir() {
-        if (!cerrada) {
-            try {
-                sesion?.despedir(Protocolo.BYE_NORMAL)
-            } catch (_: IOException) {
-                // Se cierra igual.
-            }
-        }
-        cerrar()
-    }
+    /** La sesión del socket abierto por [conectar]. */
+    fun sesion(): SesionEmisor = sesion ?: throw IOException("no conectado")
 
     fun cerrarPorTiempo() {
         vencida = true
         cerrar()
     }
 
+    /** Cierra el socket (desbloquea lo que esté esperando) y termina el lector de la sesión. */
     fun cerrar() {
         cerrada = true
         socket?.let(::cerrarSilencioso)
+        sesion?.cerrar()
     }
-
-    private fun sesionAbierta(): SesionEmisor = sesion ?: throw IOException("no conectado")
 
     private fun cerrarSilencioso(s: BluetoothSocket) {
         try {
@@ -98,10 +87,5 @@ class ConexionReceptor(private val dispositivo: BluetoothDevice) {
         } catch (_: IOException) {
             // Nada que hacer.
         }
-    }
-
-    companion object {
-        const val PINGS_PRUEBA = 20
-        const val DURACION_PRUEBA_MS = 5000L
     }
 }

@@ -1,34 +1,80 @@
 package cl.parlantey.core;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * Lado emisor (cliente) de una conexión: espera el HELLO, mide RTT y throughput y se despide.
- * Todos los métodos bloquean; un mismo hilo debe usar la sesión. Para cortar una espera
- * bloqueada, cerrar el socket desde otro hilo.
+ * Lado emisor (cliente) de una conexión. {@link #esperarHello} lee el HELLO en el hilo que llama y,
+ * si todo está bien, arranca un hilo lector que despacha lo que manda el receptor:
+ * <ul>
+ * <li>PONG → {@link #ping}, y el RTT en vivo ({@link #ultimoRttNs});</li>
+ * <li>TEST_RESULT → {@link #probarEnlace};</li>
+ * <li>STATE → {@link #estado} (y despierta a {@link #esperarEstado});</li>
+ * <li>BYE, EOF o una trama inválida → la sesión termina: lo que esté esperando, y lo que se llame
+ * después, lanza esa causa ({@link #comprobar}).</li>
+ * </ul>
+ * Las escrituras van por {@link #escritor()}, que es seguro para varios hilos. Una sesión por
+ * conexión: un STATE de una conexión anterior nunca llega a la siguiente.
  */
 public final class SesionEmisor {
 
     /** Payload de cada TEST_DATA durante la prueba de enlace. */
     public static final int LARGO_TRAMA_PRUEBA = 4096;
+    /** Sin ninguna trama durante 4 s, la conexión se da por muerta (el receptor envía STATE cada 250 ms). */
+    public static final long LIMITE_SILENCIO_NS = 4000000000L;
+    /** PING de keepalive cada 1 s, siempre (el receptor cierra tras 5 s sin tramas). */
+    public static final long INTERVALO_PING_NS = 1000000000L;
 
+    static final long ESPERA_PONG_MS = 5000;
+    /** Para el TEST_RESULT: el socket del emisor acepta ~1,5 MB, que a 18 KB/s tardan ~80 s. */
+    static final long ESPERA_RESULTADO_MS = 120000;
+
+    private final InputStream entrada;
+    private final OutputStream salidaFlujo;
     private final LectorTramas lector;
     private final EscritorTramas escritor;
+    private final Reloj reloj;
+
+    private Thread hiloLector;
+    private volatile long nanosUltimaTrama;
+    private volatile long ultimoRttNs = -1;
+    private volatile boolean audioActivo;
+    private volatile boolean cerrada;
+
+    // --- Protegido por "this".
+    private IOException causa;
+    private long pingEsperado;
+    private boolean pongRecibido;
+    private boolean resultadoRecibido;
+    private long resultadoBytes;
+    private long resultadoMs;
+    private Estado estado;
+    private long estadosRecibidos;
 
     public SesionEmisor(InputStream entrada, OutputStream salida) {
+        this(entrada, salida, Reloj.SISTEMA);
+    }
+
+    public SesionEmisor(InputStream entrada, OutputStream salida, Reloj reloj) {
+        this.entrada = entrada;
+        this.salidaFlujo = salida;
         this.lector = new LectorTramas(entrada);
         this.escritor = new EscritorTramas(salida);
+        this.reloj = reloj;
     }
 
     /**
-     * Espera el HELLO del receptor (debe ser la primera trama).
+     * Espera el HELLO del receptor (debe ser la primera trama) y arranca el hilo lector.
      *
      * @throws VersionIncompatibleException si la versión no coincide; antes de lanzarla
      *         se envía BYE con {@link Protocolo#BYE_VERSION}
      */
     public Hello esperarHello() throws IOException {
+        if (hiloLector != null) {
+            throw new IllegalStateException("el HELLO ya llegó");
+        }
         int tipo = lector.leer();
         if (tipo == Protocolo.BYE) {
             throw new ByeRecibidoException(lector.datos().readUnsignedByte());
@@ -36,8 +82,9 @@ public final class SesionEmisor {
         if (tipo != Protocolo.HELLO) {
             throw new ProtocoloException("se esperaba HELLO y llegó el tipo 0x" + Integer.toHexString(tipo));
         }
+        Hello hello;
         try {
-            return Hello.leer(lector.datos());
+            hello = Hello.leer(lector.datos());
         } catch (VersionIncompatibleException e) {
             try {
                 escritor.bye(Protocolo.BYE_VERSION);
@@ -46,28 +93,120 @@ public final class SesionEmisor {
             }
             throw e;
         }
+        nanosUltimaTrama = reloj.nanos();
+        hiloLector = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                leerHastaElFin();
+            }
+        }, "ParlanteY-lector");
+        hiloLector.setDaemon(true);
+        hiloLector.start();
+        return hello;
     }
 
-    /** Envía un PING y espera su PONG. Devuelve el RTT en nanosegundos. */
+    private void leerHastaElFin() {
+        IOException fin;
+        try {
+            while (true) {
+                int tipo = lector.leer();
+                nanosUltimaTrama = reloj.nanos();
+                if (tipo == Protocolo.BYE) {
+                    fin = new ByeRecibidoException(lector.datos().readUnsignedByte());
+                    break;
+                }
+                despachar(tipo);
+            }
+        } catch (IOException e) {
+            fin = e;
+        } catch (RuntimeException e) {
+            fin = new IOException("error en el hilo lector", e);
+        }
+        synchronized (this) {
+            causa = fin;
+            notifyAll();
+        }
+    }
+
+    private void despachar(int tipo) throws IOException {
+        switch (tipo) {
+            case Protocolo.PONG: {
+                long t = lector.datos().readLong();
+                ultimoRttNs = reloj.nanos() - t;
+                synchronized (this) {
+                    // Un PONG con otro timestamp es de un PING anterior o de un keepalive.
+                    if (t == pingEsperado) {
+                        pongRecibido = true;
+                        notifyAll();
+                    }
+                }
+                break;
+            }
+            case Protocolo.STATE: {
+                Estado e = Estado.leer(lector.datos());
+                synchronized (this) {
+                    estado = e;
+                    estadosRecibidos++;
+                    notifyAll();
+                }
+                break;
+            }
+            case Protocolo.TEST_RESULT: {
+                long bytes = lector.datos().readLong();
+                long ms = lector.datos().readInt() & 0xFFFFFFFFL;
+                synchronized (this) {
+                    resultadoBytes = bytes;
+                    resultadoMs = ms;
+                    resultadoRecibido = true;
+                    notifyAll();
+                }
+                break;
+            }
+            default:
+                // HELLO repetido, tipos desconocidos o que el emisor no usa: el payload ya se consumió.
+                break;
+        }
+    }
+
+    /**
+     * Envía un PING y espera su PONG. Devuelve el RTT en nanosegundos. Desde un solo hilo a la vez.
+     *
+     * @throws IOException si la sesión terminó o el PONG no llega en 5 s
+     */
     public long ping() throws IOException {
-        long t = System.nanoTime();
+        long t = reloj.nanos();
+        synchronized (this) {
+            comprobarLector();
+            pingEsperado = t;
+            pongRecibido = false;
+        }
         escritor.ping(t);
-        while (true) {
-            esperar(Protocolo.PONG);
-            // Un PONG con otro timestamp es de un PING anterior: se descarta.
-            if (lector.datos().readLong() == t) {
-                return System.nanoTime() - t;
+        synchronized (this) {
+            long limite = System.nanoTime() + ESPERA_PONG_MS * 1000000L;
+            while (!pongRecibido) {
+                esperarHasta(limite, "el receptor no respondió el PING");
             }
         }
+        return reloj.nanos() - t;
+    }
+
+    /** PING de keepalive sin esperar el PONG (que actualiza {@link #ultimoRttNs}). */
+    public void enviarPing() throws IOException {
+        escritor.ping(reloj.nanos());
     }
 
     /**
      * Prueba de enlace: {@code pings} PING/PONG y luego TEST_DATA durante {@code duracionMs}
      * con tramas de {@code largoTrama} bytes de payload; la última lleva {@link Protocolo#FLAG_ULTIMA}.
+     *
+     * @throws IllegalStateException si hay audio en curso ({@link #setAudioActivo})
      */
     public ResultadoPrueba probarEnlace(int pings, long duracionMs, int largoTrama) throws IOException {
         if (pings < 1) {
             throw new IllegalArgumentException("se necesita al menos un ping");
+        }
+        if (audioActivo) {
+            throw new IllegalStateException("la prueba de enlace no puede correr con audio en curso");
         }
         long min = Long.MAX_VALUE;
         long max = 0;
@@ -79,41 +218,166 @@ public final class SesionEmisor {
             suma += rtt;
         }
 
+        synchronized (this) {
+            resultadoRecibido = false;
+        }
         long bytesTrama = Protocolo.LARGO_CABECERA + largoTrama;
         long enviados = 0;
         long inicio = System.nanoTime();
         long fin = inicio + duracionMs * 1000000L;
         while (System.nanoTime() - fin < 0) {
+            comprobar();
             escritor.testData(largoTrama, false);
             enviados += bytesTrama;
         }
         escritor.testData(largoTrama, true);
         enviados += bytesTrama;
 
-        esperar(Protocolo.TEST_RESULT);
-        long bytesRecibidos = lector.datos().readLong();
-        long duracionReceptorMs = lector.datos().readInt() & 0xFFFFFFFFL;
+        long bytesRecibidos;
+        long duracionReceptorMs;
+        synchronized (this) {
+            long limite = System.nanoTime() + ESPERA_RESULTADO_MS * 1000000L;
+            while (!resultadoRecibido) {
+                esperarHasta(limite, "el receptor no envió TEST_RESULT");
+            }
+            bytesRecibidos = resultadoBytes;
+            duracionReceptorMs = resultadoMs;
+        }
         long duracionEmisorMs = (System.nanoTime() - inicio) / 1000000L;
 
         return new ResultadoPrueba(pings, min, suma / pings, max,
                 enviados, bytesRecibidos, duracionReceptorMs, duracionEmisorMs);
     }
 
-    /** Envía BYE. No cierra el flujo: eso le toca a quien abrió el socket. */
+    /** Marca que hay audio en curso: mientras tanto, {@link #probarEnlace} se rechaza. */
+    public void setAudioActivo(boolean activo) {
+        audioActivo = activo;
+    }
+
+    /** Último STATE recibido en esta conexión, o null si todavía no llega ninguno. */
+    public synchronized Estado estado() {
+        return estado;
+    }
+
+    public synchronized long estadosRecibidos() {
+        return estadosRecibidos;
+    }
+
+    /**
+     * Espera hasta {@code ms} a que llegue un STATE nuevo. Devuelve true si llegó.
+     *
+     * @throws IOException si la sesión terminó
+     */
+    public synchronized boolean esperarEstado(long ms) throws IOException {
+        comprobarLector();
+        long antes = estadosRecibidos;
+        if (ms > 0) {
+            long limite = System.nanoTime() + ms * 1000000L;
+            while (estadosRecibidos == antes && causa == null) {
+                long resto = (limite - System.nanoTime()) / 1000000L;
+                if (resto <= 0) {
+                    break;
+                }
+                esperar(resto);
+            }
+        }
+        if (estadosRecibidos != antes) {
+            return true;
+        }
+        comprobarLector();
+        return false;
+    }
+
+    /** {@link Reloj#nanos()} de la última trama recibida (o del HELLO). */
+    public long nanosUltimaTrama() {
+        return nanosUltimaTrama;
+    }
+
+    /** true si pasaron más de {@link #LIMITE_SILENCIO_NS} sin ninguna trama: hay que cerrar. */
+    public boolean vencida(long ahoraNs) {
+        return hiloLector != null && ahoraNs - nanosUltimaTrama > LIMITE_SILENCIO_NS;
+    }
+
+    /** RTT del último PONG (también de los keepalive), en ns; −1 si todavía no hay. */
+    public long ultimoRttNs() {
+        return ultimoRttNs;
+    }
+
+    /** Escritor de la conexión, para CONFIG, TRACK, CONTROL y AUDIO. */
+    public EscritorTramas escritor() {
+        return escritor;
+    }
+
+    /** Causa del fin de la sesión (BYE, EOF, error), o null si sigue viva. */
+    public synchronized IOException causa() {
+        return causa;
+    }
+
+    /** Lanza la causa si la sesión terminó. */
+    public synchronized void comprobar() throws IOException {
+        comprobarLector();
+    }
+
+    /** Envía BYE. No cierra la conexión: eso lo hace {@link #cerrar}. */
     public void despedir(int codigo) throws IOException {
         escritor.bye(codigo);
     }
 
-    /** Lee tramas hasta una del tipo pedido, ignorando las demás. BYE corta la espera. */
-    private void esperar(int tipoEsperado) throws IOException {
-        while (true) {
-            int tipo = lector.leer();
-            if (tipo == tipoEsperado) {
-                return;
+    /**
+     * Cierra los flujos (con un socket, eso lo cierra y desbloquea la lectura en curso) y espera
+     * a que termine el hilo lector. Se puede llamar desde cualquier hilo y más de una vez.
+     */
+    public void cerrar() {
+        cerrada = true;
+        cerrarSilencioso(entrada);
+        cerrarSilencioso(salidaFlujo);
+        Thread t = hiloLector;
+        if (t != null && t != Thread.currentThread()) {
+            try {
+                t.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-            if (tipo == Protocolo.BYE) {
-                throw new ByeRecibidoException(lector.datos().readUnsignedByte());
-            }
+        }
+    }
+
+    public boolean cerrada() {
+        return cerrada;
+    }
+
+    private void comprobarLector() throws IOException {
+        if (causa != null) {
+            throw causa;
+        }
+        if (cerrada) {
+            throw new IOException("sesión cerrada");
+        }
+    }
+
+    /** Con el monitor tomado: espera hasta el límite (System.nanoTime) o lanza la causa. */
+    private void esperarHasta(long limite, String mensajeTiempo) throws IOException {
+        comprobarLector();
+        long resto = (limite - System.nanoTime()) / 1000000L;
+        if (resto <= 0) {
+            throw new IOException(mensajeTiempo);
+        }
+        esperar(resto); // quien llama revisa su condición y vuelve aquí, que revisa la causa
+    }
+
+    private void esperar(long ms) throws IOException {
+        try {
+            wait(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("espera interrumpida");
+        }
+    }
+
+    private static void cerrarSilencioso(Closeable c) {
+        try {
+            c.close();
+        } catch (IOException ignorada) {
+            // Nada que hacer: se está cerrando.
         }
     }
 }

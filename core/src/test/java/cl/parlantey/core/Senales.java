@@ -66,6 +66,66 @@ final class Senales {
         return s;
     }
 
+    /**
+     * SNR en dB de un tono de {@code frecuencia} Hz en {@code x[desde, desde + n)} (canal 0 de
+     * {@code canales}): ajusta por mínimos cuadrados a·sen + b·cos + c y compara la energía del
+     * ajuste con la del residuo. No depende de la fase ni del retardo.
+     */
+    static double snrTono(short[] x, int desde, int n, int canales, int tasa, double frecuencia) {
+        double[][] m = new double[3][3];
+        double[] v = new double[3];
+        for (int i = 0; i < n; i++) {
+            double w = 2 * Math.PI * frecuencia * i / tasa;
+            double[] base = {Math.sin(w), Math.cos(w), 1};
+            double y = x[desde + i * canales];
+            for (int a = 0; a < 3; a++) {
+                v[a] += base[a] * y;
+                for (int b = 0; b < 3; b++) {
+                    m[a][b] += base[a] * base[b];
+                }
+            }
+        }
+        double[] c = resolver3(m, v);
+        double senal = 0;
+        double ruido = 0;
+        for (int i = 0; i < n; i++) {
+            double w = 2 * Math.PI * frecuencia * i / tasa;
+            double ajuste = c[0] * Math.sin(w) + c[1] * Math.cos(w);
+            double d = x[desde + i * canales] - ajuste - c[2];
+            senal += ajuste * ajuste;
+            ruido += d * d;
+        }
+        return 10 * Math.log10(senal / Math.max(ruido, 1e-9));
+    }
+
+    private static double[] resolver3(double[][] m, double[] v) {
+        double[][] a = new double[3][4];
+        for (int i = 0; i < 3; i++) {
+            System.arraycopy(m[i], 0, a[i], 0, 3);
+            a[i][3] = v[i];
+        }
+        for (int col = 0; col < 3; col++) {
+            int piv = col;
+            for (int i = col + 1; i < 3; i++) {
+                if (Math.abs(a[i][col]) > Math.abs(a[piv][col])) {
+                    piv = i;
+                }
+            }
+            double[] t = a[col];
+            a[col] = a[piv];
+            a[piv] = t;
+            for (int i = 0; i < 3; i++) {
+                if (i != col) {
+                    double f = a[i][col] / a[col][col];
+                    for (int j = col; j < 4; j++) {
+                        a[i][j] -= f * a[col][j];
+                    }
+                }
+            }
+        }
+        return new double[] {a[0][3] / a[0][0], a[1][3] / a[1][1], a[2][3] / a[2][2]};
+    }
+
     static short saturar(int v) {
         return (short) Math.max(-32768, Math.min(32767, v));
     }

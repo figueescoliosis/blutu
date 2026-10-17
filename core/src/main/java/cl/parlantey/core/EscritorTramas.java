@@ -16,6 +16,7 @@ public final class EscritorTramas {
     private final OutputStream salida;
     private final BufferTrama trama = new BufferTrama(Protocolo.LARGO_CABECERA + Protocolo.MAX_PAYLOAD);
     private final DataOutputStream datos = new DataOutputStream(trama);
+    private long ultimoSeqAudio = Protocolo.SEQ_NINGUNO;
 
     public EscritorTramas(OutputStream salida) {
         this.salida = salida;
@@ -46,6 +47,15 @@ public final class EscritorTramas {
         datos.writeInt((int) seq);
         trama.write(bloque, desde, largo);
         enviar(Protocolo.AUDIO, 0);
+        ultimoSeqAudio = seq;
+    }
+
+    /**
+     * seq del último AUDIO enviado por esta conexión, o {@link Protocolo#SEQ_NINGUNO}. El seq
+     * sigue de un pipeline al siguiente dentro de la misma conexión.
+     */
+    public synchronized long ultimoSeqAudio() {
+        return ultimoSeqAudio;
     }
 
     public synchronized void track(Track track) throws IOException {

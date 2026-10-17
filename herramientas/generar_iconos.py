@@ -9,6 +9,8 @@ from PIL import Image, ImageDraw
 RAIZ = Path(__file__).resolve().parent.parent
 
 # Receptor: drawable-*, que entiende Android 2.3. Emisor: mipmap-*.
+# ic_notificacion: ícono de la barra de estado, blanco sobre transparente (24 dp; en 2.3 ocupa
+# 24×24 px en mdpi). Va en drawable-* en las dos apps.
 DESTINOS = {
     "receptor": ("drawable", (0xE6, 0x7E, 0x22),
                  {"ldpi": 36, "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144}),
@@ -37,7 +39,35 @@ def icono(lado, color):
     return img.resize((lado, lado), Image.LANCZOS)
 
 
+def notificacion(lado):
+    """Parlante con una onda, blanco sobre transparente, dibujado a 8x y reducido."""
+    s = lado * 8
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    blanco = (255, 255, 255, 255)
+    d.rectangle([s * 0.10, s * 0.36, s * 0.26, s * 0.64], fill=blanco)
+    d.polygon([(s * 0.26, s * 0.36), (s * 0.50, s * 0.14), (s * 0.50, s * 0.86), (s * 0.26, s * 0.64)],
+              fill=blanco)
+    ancho = max(1, int(s * 0.09))
+    for r in (0.16, 0.32):
+        caja = [s * 0.50 - r * s, s * 0.50 - r * s, s * 0.50 + r * s, s * 0.50 + r * s]
+        d.arc(caja, start=-55, end=55, fill=blanco, width=ancho)
+    return img.resize((lado, lado), Image.LANCZOS)
+
+
+NOTIFICACION = {
+    "receptor": {"ldpi": 18, "mdpi": 24, "hdpi": 36, "xhdpi": 48, "xxhdpi": 72},
+    "emisor": {"mdpi": 24, "hdpi": 36, "xhdpi": 48, "xxhdpi": 72, "xxxhdpi": 96},
+}
+
+
 def main():
+    for modulo, densidades in NOTIFICACION.items():
+        for densidad, lado in densidades.items():
+            carpeta = RAIZ / modulo / "src" / "main" / "res" / f"drawable-{densidad}"
+            carpeta.mkdir(parents=True, exist_ok=True)
+            notificacion(lado).save(carpeta / "ic_notificacion.png", optimize=True)
+            print(carpeta / "ic_notificacion.png", lado)
     for modulo, (tipo, color, densidades) in DESTINOS.items():
         for densidad, lado in densidades.items():
             carpeta = RAIZ / modulo / "src" / "main" / "res" / f"{tipo}-{densidad}"

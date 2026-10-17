@@ -11,6 +11,9 @@
     <issue id="HardwareIds" severity="ignore" />
     <!-- Pantalla fija en vertical (240×320); los avisos son para Chrome OS y Android 16+. -->
     <issue id="LockedOrientationActivity" severity="ignore" />
+    <!-- buttonBarButtonStyle y layout_marginEnd/Start son de API 11 y 17. -->
+    <issue id="ButtonStyle" severity="ignore" />
+    <issue id="RtlHardcoded" severity="ignore" />
     <issue id="DiscouragedApi">
         <ignore regexp="screenOrientation|orientations" />
     </issue>

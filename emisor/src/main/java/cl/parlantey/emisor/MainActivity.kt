@@ -30,8 +30,8 @@ class MainActivity : ComponentActivity() {
 
     private val vm: EmisorViewModel by viewModels()
 
-    private val pedirPermiso =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { vm.refrescar() }
+    private val pedirPermisos =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.refrescar() }
 
     private val pedirEncender =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.refrescar() }
@@ -53,8 +53,14 @@ class MainActivity : ComponentActivity() {
             probar = vm::probarEnlace,
             desconectar = vm::desconectar,
             elegirWifi = vm::elegirWifi,
-            copiarMediciones = ::copiarMediciones,
+            elegirPreset = vm::elegirPreset,
+            elegirTasa = vm::elegirTasa,
+            iniciarTono = vm::iniciarTono,
+            detenerTono = vm::detenerTono,
+            copiarMediciones = { copiar(vm.textoParaNotas()) },
             borrarMediciones = vm::borrarMediciones,
+            copiarPruebasTono = { copiar(vm.textoNotasFase2()) },
+            borrarPruebasTono = vm::borrarPruebasTono,
             cerrarError = vm::cerrarError,
         )
         setContent {
@@ -63,7 +69,14 @@ class MainActivity : ComponentActivity() {
                 Pantalla(ui, acciones)
             }
         }
+        // Al abrir la app se piden juntos BLUETOOTH_CONNECT y POST_NOTIFICATIONS (si faltan).
+        if (savedInstanceState == null && permisosFaltantes().isNotEmpty()) pedirPermisoBluetooth()
     }
+
+    private fun permisosFaltantes(): List<String> = buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(Manifest.permission.BLUETOOTH_CONNECT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+    }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
 
     override fun onStart() {
         super.onStart()
@@ -85,11 +98,13 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
-    /** BLUETOOTH_CONNECT es un permiso de runtime solo desde API 31; antes basta el manifiesto. */
+    /**
+     * BLUETOOTH_CONNECT es un permiso de runtime desde API 31 (antes basta el manifiesto) y
+     * POST_NOTIFICATIONS desde API 33. Sin notificaciones el servicio corre igual.
+     */
     private fun pedirPermisoBluetooth() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            pedirPermiso.launch(Manifest.permission.BLUETOOTH_CONNECT)
-        }
+        val faltan = permisosFaltantes()
+        if (faltan.isNotEmpty()) pedirPermisos.launch(faltan.toTypedArray())
     }
 
     private fun encenderBluetooth() {
@@ -106,12 +121,12 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
     }
 
-    private fun copiarMediciones() {
+    private fun copiar(texto: String) {
         getSystemService(ClipboardManager::class.java)
-            .setPrimaryClip(ClipData.newPlainText("ParlanteY", vm.textoParaNotas()))
+            .setPrimaryClip(ClipData.newPlainText("ParlanteY", texto))
         // Desde Android 13 el sistema ya muestra su propio aviso al copiar.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            Toast.makeText(this, "Mediciones copiadas", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Copiado para NOTAS.md", Toast.LENGTH_SHORT).show()
         }
     }
 }

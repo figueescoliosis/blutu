@@ -6,13 +6,31 @@
     <string name="este_telefono">Este teléfono: %1$s</string>
 
     <string name="estado_sin_bt">Este teléfono no tiene Bluetooth</string>
+    <string name="estado_iniciando">Iniciando…</string>
+    <string name="estado_detenido">Receptor detenido</string>
     <string name="estado_bt_apagado">Bluetooth apagado</string>
     <string name="estado_esperando">Esperando conexión…</string>
     <string name="estado_conectado">Conectado a %1$s</string>
+    <string name="estado_llenando">Llenando buffer… (%1$s)</string>
+    <string name="estado_reproduciendo">Reproduciendo (%1$s)</string>
+    <string name="estado_en_pausa">En pausa (%1$s)</string>
+    <string name="estado_corte">Corte: esperando audio (%1$s)</string>
+
+    <string name="pista_ninguna">—</string>
+    <string name="buffer_etiqueta">Buffer </string>
+    <string name="buffer_cortes">cortes</string>
+    <string name="formato_ninguno">Sin audio</string>
+    <!-- «48 kHz estéreo · Alta · dec 1,2 ms» -->
+    <string name="formato">%1$s kHz %2$s · %3$s · dec %4$s ms</string>
+    <string name="mono">mono</string>
+    <string name="estereo">estéreo</string>
+    <string name="diagnostico">subcortes %1$d · desbordes %2$d · err. salida %3$d · GC %4$s/min · CPU %5$s %% · prio. audio %6$s · reinicios %7$d</string>
+    <string name="ultimo_error">Último error: %1$s</string>
 
     <string name="evento_ninguno">—</string>
     <string name="evento_emisor_salio">El emisor se desconectó</string>
     <string name="evento_conexion_perdida">Se perdió la conexión</string>
+    <string name="evento_sin_respuesta">El emisor dejó de responder (5 s sin datos)</string>
     <string name="evento_protocolo">Error de protocolo: %1$s</string>
     <string name="evento_servidor">Error del servidor Bluetooth: %1$s</string>
     <string name="evento_version">El emisor usa otra versión del protocolo. Actualiza las dos apps.</string>
@@ -21,8 +39,10 @@
     <string name="evento_bt_rechazado">Sin Bluetooth no se puede recibir</string>
 
     <string name="prueba_ninguna">Sin pruebas de enlace todavía</string>
-    <string name="prueba_resultado">Última prueba: %1$s KB/s\n(%2$s KB en %3$s s)</string>
+    <string name="prueba_resultado">Última prueba de enlace: %1$s KB/s (%2$s KB en %3$s s)</string>
 
     <string name="boton_visible">Hacer visible</string>
-    <string name="ayuda">Para vincular: toca Hacer visible y, en el emisor, Ajustes → Bluetooth → vincular.</string>
+    <string name="boton_detener">Detener receptor</string>
+    <string name="notificacion_toca">Toca para abrir</string>
+    <string name="ayuda">Para vincular: Hacer visible y, en el emisor, Ajustes → Bluetooth → vincular. Sigue sonando con la pantalla apagada.</string>
 </resources>

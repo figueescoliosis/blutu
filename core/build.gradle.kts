@@ -25,9 +25,10 @@ android {
 
     testOptions {
         unitTests.all {
-            // Intérprete: sin el escape analysis del JIT, SinAsignacionesTest ve las asignaciones
-            // que Dalvik sí haría.
-            it.jvmArgs("-Xint")
+            // Sin escape analysis: el JIT no elimina asignaciones que Dalvik sí haría, así que
+            // SinAsignacionesTest las ve (lo comprueba laMedicionDetectaAsignacionesQueNoEscapan).
+            // Con -Xint la simulación de 10 minutos tardaría demasiado.
+            it.jvmArgs("-XX:-DoEscapeAnalysis", "-XX:-EliminateAllocations")
         }
     }
 }

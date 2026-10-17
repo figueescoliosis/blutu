@@ -5,22 +5,27 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
 import android.os.Build;
+import android.util.Log;
 
 import java.io.Closeable;
 import java.io.IOException;
 
+import cl.parlantey.core.ColaBloques;
 import cl.parlantey.core.Hello;
 import cl.parlantey.core.Protocolo;
 import cl.parlantey.core.ProtocoloException;
+import cl.parlantey.core.Reproductor;
 import cl.parlantey.core.SesionReceptor;
+import cl.parlantey.core.Track;
 
 /**
- * Servidor RFCOMM: publica el servicio, acepta una conexión a la vez y la atiende con
- * {@link SesionReceptor}. Al perderse la conexión vuelve a {@code accept()} solo.
+ * Hilo de red del receptor: publica el servicio RFCOMM, acepta una conexión a la vez y la atiende
+ * con {@link SesionReceptor} (este hilo lee las tramas; un {@link HiloEstado} envía STATE cada
+ * 250 ms y vigila que lleguen tramas). Al perderse la conexión vuelve a {@code accept()} solo.
  */
 final class HiloServidor extends Thread {
 
-    /** Avisos a la UI. Se llaman desde este hilo. */
+    /** Avisos al servicio. Se llaman desde este hilo y no deben bloquear. */
     interface Oyente {
         void esperando();
 
@@ -30,24 +35,33 @@ final class HiloServidor extends Thread {
 
         void pruebaTerminada(long bytesRecibidos, long duracionMs);
 
+        void track(Track track);
+
         void versionIncompatible();
 
         void bluetoothApagado();
+
+        void error(String donde, Throwable t);
     }
 
     private static final long ESPERA_MAX_MS = 10000;
 
     private final BluetoothAdapter adaptador;
     private final Hello hello;
+    private final ColaBloques cola;
+    private final Reproductor reproductor;
     private final Oyente oyente;
 
     private volatile boolean activo = true;
     private volatile Closeable abierto;
+    private volatile SesionReceptor sesion;
 
-    HiloServidor(BluetoothAdapter adaptador, Hello hello, Oyente oyente) {
+    HiloServidor(BluetoothAdapter adaptador, Hello hello, ColaBloques cola, Reproductor reproductor, Oyente oyente) {
         super("ParlanteY-servidor");
         this.adaptador = adaptador;
         this.hello = hello;
+        this.cola = cola;
+        this.reproductor = reproductor;
         this.oyente = oyente;
     }
 
@@ -56,6 +70,20 @@ final class HiloServidor extends Thread {
         activo = false;
         cerrar(abierto);
         interrupt();
+    }
+
+    /** "Detener receptor": BYE(0) al emisor conectado (si hay) y detiene el hilo. */
+    void despedirYDetener() {
+        activo = false;
+        SesionReceptor s = sesion;
+        if (s != null) {
+            try {
+                s.despedir();
+            } catch (IOException ignorada) {
+                // Se cierra igual.
+            }
+        }
+        detener();
     }
 
     @Override
@@ -92,7 +120,12 @@ final class HiloServidor extends Thread {
             fallos = 0;
             abierto = socket;
             if (activo) {
-                atender(socket);
+                try {
+                    atender(socket);
+                } catch (Throwable t) {
+                    // Cualquier falla de una conexión no debe tumbar el servidor: vuelve a accept().
+                    oyente.error("conexión", t);
+                }
             }
             cerrar(socket);
             abierto = null;
@@ -111,21 +144,87 @@ final class HiloServidor extends Thread {
         }
     }
 
-    private void atender(BluetoothSocket socket) {
+    private void atender(final BluetoothSocket socket) throws IOException {
         oyente.conectado(nombreDe(socket.getRemoteDevice()));
+        SesionReceptor s = new SesionReceptor(socket.getInputStream(), socket.getOutputStream(), hello, cola,
+                reproductor, new SesionReceptor.Oyente() {
+                    @Override
+                    public void pruebaTerminada(long bytesRecibidos, long duracionMs) {
+                        oyente.pruebaTerminada(bytesRecibidos, duracionMs);
+                    }
+
+                    @Override
+                    public void track(Track track) {
+                        oyente.track(track);
+                    }
+                }, cl.parlantey.core.Reloj.SISTEMA);
+        HiloEstado estado = new HiloEstado(s, socket);
         try {
-            int codigo = SesionReceptor.atender(socket.getInputStream(), socket.getOutputStream(), hello,
-                    oyente::pruebaTerminada);
+            s.iniciar();
+            sesion = s;
+            estado.start();
+            int codigo;
+            do {
+                codigo = s.procesarTrama();
+            } while (codigo < 0 && activo);
             if (codigo == Protocolo.BYE_VERSION) {
                 oyente.versionIncompatible();
-            } else {
+            } else if (codigo >= 0) {
                 oyente.desconectado(R.string.evento_emisor_salio, null);
             }
         } catch (ProtocoloException e) {
             oyente.desconectado(R.string.evento_protocolo, e.getMessage());
         } catch (IOException e) {
             if (activo) {
-                oyente.desconectado(R.string.evento_conexion_perdida, null);
+                oyente.desconectado(estado.vencido ? R.string.evento_sin_respuesta : R.string.evento_conexion_perdida,
+                        null);
+            }
+        } finally {
+            sesion = null;
+            estado.detener();
+            s.terminar(); // como DETENER: la reproducción se detiene y la salida se libera
+        }
+    }
+
+    /** Hilo de STATE de una conexión: STATE cada 250 ms y watchdog de 5 s sin tramas. */
+    private final class HiloEstado extends Thread {
+        private final SesionReceptor sesion;
+        private final BluetoothSocket socket;
+        private volatile boolean sigue = true;
+        volatile boolean vencido;
+
+        HiloEstado(SesionReceptor sesion, BluetoothSocket socket) {
+            super("ParlanteY-estado");
+            this.sesion = sesion;
+            this.socket = socket;
+        }
+
+        void detener() {
+            sigue = false;
+            interrupt();
+        }
+
+        @Override
+        public void run() {
+            try {
+                while (sigue) {
+                    if (!sesion.tickEstado(System.nanoTime())) {
+                        Log.i(Registro.TAG, "5 s sin tramas del emisor: se cierra la conexión");
+                        vencido = true;
+                        break;
+                    }
+                    long ms = sesion.nanosHastaEstado(System.nanoTime()) / 1000000L;
+                    Thread.sleep(Math.max(1, ms));
+                }
+            } catch (InterruptedException fin) {
+                return; // detener()
+            } catch (IOException e) {
+                // La conexión se cortó: el hilo de red se entera al leer.
+            } catch (Throwable t) {
+                oyente.error("STATE", t);
+            }
+            if (sigue) {
+                cerrar(socket); // desbloquea la lectura del hilo de red
             }
         }
     }

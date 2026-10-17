@@ -11,8 +11,8 @@ android {
         applicationId = "cl.parlantey.emisor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.0.1"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildFeatures {
@@ -37,6 +37,7 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    implementation(libs.androidx.core.ktx)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
