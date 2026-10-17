@@ -66,6 +66,14 @@ class ConexionReceptor(private val dispositivo: BluetoothDevice) {
         }
     }
 
+    /** Espera hasta [ms] a que el lector de la sesión termine (si hay sesión). */
+    fun esperarFinLector(ms: Long) {
+        sesion?.esperarFin(ms)
+    }
+
+    /** Por qué terminó el lector de la sesión (BYE, EOF, trama inválida), o null. */
+    fun causaLector(): IOException? = sesion?.causa()
+
     /** La sesión del socket abierto por [conectar]. */
     fun sesion(): SesionEmisor = sesion ?: throw IOException("no conectado")
 

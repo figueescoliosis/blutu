@@ -67,6 +67,11 @@ class Supervisor(
     /** cortes de las conexiones anteriores de la prueba de tono actual. */
     private var cortesPrevios = 0L
     private var cortesConexion = 0L
+    /**
+     * STATE.cortes al empezar el tono en esta conexión: el receptor cuenta por conexión, así que
+     * un segundo tono en la misma conexión no debe heredar los cortes del primero.
+     */
+    private var cortesBase = 0L
     /** elapsedRealtime del último STATE_ON con un tono en curso, hasta que vuelve a sonar. */
     @Volatile private var esperandoSonarDesde = 0L
 
@@ -115,6 +120,7 @@ class Supervisor(
                 publicarEnlace(Enlace.Conectando(dispositivo, intento))
                 val c = ConexionReceptor(adaptador.getRemoteDevice(dispositivo.direccion))
                 conexion = c
+                var falla: Exception? = null
                 try {
                     if (detenido) break
                     plazo(TIEMPO_CONEXION_MS)
@@ -130,28 +136,33 @@ class Supervisor(
                     desdeFallaMs = 0
                     conectado(s, hello)
                 } catch (e: Exception) {
-                    if (detenido) break
-                    val reintentar = clasificar(e, huboHello, c) ?: break
-                    if (!adaptador.isEnabled) continue // se apagó el Bluetooth: no cuenta como intento
-                    val ahora = SystemClock.elapsedRealtime()
-                    if (desdeFallaMs == 0L) desdeFallaMs = ahora
-                    if (ahora - desdeFallaMs > MAX_RECONEXION_MS) {
-                        terminar("No se pudo reconectar con ${dispositivo.nombre} en 5 minutos ($reintentar).")
-                        break
-                    }
-                    val espera = minOf(1000L shl minOf(intento, 4), MAX_ESPERA_MS)
-                    intento++
-                    publicarEnlace(Enlace.Reconectando(dispositivo, intento, ahora + espera, reintentar))
-                    if (esperarReintento(espera)) {
-                        intento = 0 // STATE_ON: backoff en cero
-                        desdeFallaMs = 0
-                    }
+                    falla = e
+                    // Un BYE o una trama inválida del receptor puede llegar al lector justo después de que
+                    // una escritura falle: darle un momento antes de cerrar, para clasificar bien.
+                    if (!detenido && e is IOException) c.esperarFinLector(ESPERA_CAUSA_MS)
                 } finally {
+                    // Limpiar antes de esperar el reintento: el vigía no debe ver esta conexión.
                     plazo(0)
                     sesion = null
                     conexion = null
                     c.cerrar()
                     pipeline?.desconectar()
+                }
+                if (detenido || falla == null) break
+                val reintentar = clasificar(c.causaLector() ?: falla, falla, huboHello, c) ?: break
+                if (!adaptador.isEnabled) continue // se apagó el Bluetooth: no cuenta como intento
+                val ahora = SystemClock.elapsedRealtime()
+                if (desdeFallaMs == 0L) desdeFallaMs = ahora
+                if (ahora - desdeFallaMs > MAX_RECONEXION_MS) {
+                    terminar("No se pudo reconectar con ${dispositivo.nombre} en 5 minutos ($reintentar).")
+                    break
+                }
+                val espera = minOf(1000L shl minOf(intento, 4), MAX_ESPERA_MS)
+                intento++
+                publicarEnlace(Enlace.Reconectando(dispositivo, intento, ahora + espera, reintentar))
+                if (esperarReintento(espera)) {
+                    intento = 0 // STATE_ON: backoff en cero
+                    desdeFallaMs = 0
                 }
             }
         } catch (t: Throwable) {
@@ -166,9 +177,11 @@ class Supervisor(
 
     /**
      * Decide qué hacer con una falla: devuelve la causa (texto) si hay que reintentar, o null si
-     * la sesión termina (y publica el error).
+     * la sesión termina (y publica el error). [causaLector] es lo que vio el lector de la sesión
+     * (un BYE o una trama inválida del receptor pesan más que el error de escritura [falla]).
      */
-    private fun clasificar(e: Exception, huboHello: Boolean, c: ConexionReceptor): String? {
+    private fun clasificar(causaLector: Exception, falla: Exception, huboHello: Boolean, c: ConexionReceptor): String? {
+        val e = if (causaLector is ByeRecibidoException || causaLector is ProtocoloException) causaLector else falla
         Log.i(TAG, "conexión terminada: $e")
         when (e) {
             is VersionIncompatibleException -> terminar(
@@ -221,6 +234,7 @@ class Supervisor(
         // El receptor cuenta los cortes por conexión: se acumulan los de la conexión anterior.
         cortesPrevios += cortesConexion
         cortesConexion = 0
+        cortesBase = 0
         pipeline?.let { p ->
             // Reconexión con el tono en curso: CONFIG + TRACK de nuevo y sigue sonando.
             p.conectar(s.escritor(), s::estado, hello.capacidadBufferMs)
@@ -294,6 +308,7 @@ class Supervisor(
                 pipeline = p
                 cortesPrevios = 0
                 cortesConexion = 0
+                cortesBase = s.estado()?.cortes ?: 0
                 esperandoSonarDesde = 0
                 val cfg = p.config()
                 val r = ResumenTono(
@@ -339,8 +354,8 @@ class Supervisor(
     private fun alRecibirEstado(s: SesionEmisor, p: PipelineEmisor?) {
         val e = s.estado() ?: return
         if (p == null) return
-        val vivo = EnVivo(e.bufferMs, cortesPrevios + e.cortes, e.reproduciendo, p.nivelEstimadoMs(), e.ultimoSeq)
-        cortesConexion = e.cortes
+        cortesConexion = (e.cortes - cortesBase).coerceAtLeast(0)
+        val vivo = EnVivo(e.bufferMs, cortesPrevios + cortesConexion, e.reproduciendo, p.nivelEstimadoMs(), e.ultimoSeq)
         val ahora = SystemClock.elapsedRealtime()
         var recuperacion: Long? = null
         if (esperandoSonarDesde != 0L && e.reproduciendo) {
@@ -402,6 +417,7 @@ class Supervisor(
     }
 
     private fun plazo(ms: Long) {
+        if (detenido) return // se mantiene el plazo de la despedida (detener)
         plazoNs = if (ms == 0L) 0L else System.nanoTime() + ms * 1_000_000L
     }
 
@@ -487,6 +503,7 @@ class Supervisor(
         private const val MAX_RECONEXION_MS = 5 * 60_000L
         private const val ESPERA_TRAS_ENCENDER_MS = 1_000L
         private const val VIGILANCIA_MS = 250L
+        private const val ESPERA_CAUSA_MS = 300L
         const val PINGS_PRUEBA = 20
         const val DURACION_PRUEBA_MS = 5000L
         val FORMATO_HORA: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

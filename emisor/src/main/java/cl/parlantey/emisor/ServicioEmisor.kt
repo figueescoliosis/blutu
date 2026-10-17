@@ -43,10 +43,11 @@ class ServicioEmisor : Service() {
     private var supervisor: Supervisor? = null
     private var enPrimerPlano = false
     private lateinit var wakeLock: PowerManager.WakeLock
+    private var renovando = false
 
     private val renovarWakeLock = object : Runnable {
         override fun run() {
-            if (supervisor == null) return
+            if (supervisor == null || !renovando) return
             // Con tiempo límite (lo pide Android); se renueva cada minuto mientras haga falta.
             wakeLock.acquire(DURACION_WAKE_LOCK_MS)
             principal.postDelayed(this, RENOVACION_WAKE_LOCK_MS)
@@ -56,8 +57,10 @@ class ServicioEmisor : Service() {
     private val cambiosBluetooth = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val estado = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
-            if (estado == BluetoothAdapter.STATE_ON) {
+            if (estado == BluetoothAdapter.STATE_ON && supervisor != null) {
                 Log.i(Supervisor.TAG, "Bluetooth encendido")
+                // Con el Bluetooth apagado se soltó el wake lock: tomarlo ya, antes de reconectar.
+                wakeLock.acquire(DURACION_WAKE_LOCK_MS)
                 supervisor?.bluetoothEncendido()
             }
         }
@@ -85,6 +88,12 @@ class ServicioEmisor : Service() {
         alcance.launch {
             EstadoEmisor.estado.map(::textoNotificacion).distinctUntilChanged().collect { (titulo, texto) ->
                 if (enPrimerPlano) nm.notify(ID_NOTIFICACION, notificacion(titulo, texto))
+            }
+        }
+        // Con el Bluetooth apagado la espera puede durar horas: sin wake lock hasta que se encienda.
+        alcance.launch {
+            EstadoEmisor.estado.map { it.enlace is Enlace.BluetoothApagado }.distinctUntilChanged().collect { apagado ->
+                actualizarWakeLock(!apagado)
             }
         }
     }
@@ -138,17 +147,55 @@ class ServicioEmisor : Service() {
         }
         val d = Dispositivo(intent.getStringExtra(EXTRA_NOMBRE) ?: direccion, direccion)
         EstadoEmisor.actualizar { it.copy(error = null, aviso = null) }
+        getSystemService(NotificationManager::class.java).cancel(ID_FIN)
         val s = Supervisor(adaptador, d) { principal.post(::alTerminarSupervisor) }
         supervisor = s
-        principal.post(renovarWakeLock)
+        actualizarWakeLock(true)
         s.iniciar()
+    }
+
+    private fun actualizarWakeLock(hace: Boolean) {
+        if (hace && supervisor != null) {
+            if (!renovando) {
+                renovando = true
+                principal.post(renovarWakeLock)
+            }
+        } else {
+            renovando = false
+            principal.removeCallbacks(renovarWakeLock)
+            if (wakeLock.isHeld) wakeLock.release()
+        }
     }
 
     private fun alTerminarSupervisor() {
         supervisor = null
-        principal.removeCallbacks(renovarWakeLock)
-        if (wakeLock.isHeld) wakeLock.release()
+        actualizarWakeLock(false)
+        avisarFin()
         terminarSiInactivo()
+    }
+
+    /**
+     * Si la conexión terminó por un error o un aviso (p. ej. con la pantalla apagada), deja una
+     * notificación común que se puede descartar: la del servicio desaparece con él.
+     */
+    private fun avisarFin() {
+        val e = EstadoEmisor.estado.value
+        val mensaje = e.error ?: e.aviso ?: return
+        val abrir = PendingIntent.getActivity(
+            this,
+            2,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = NotificationCompat.Builder(this, CANAL)
+            .setSmallIcon(R.drawable.ic_notificacion)
+            .setContentTitle(if (e.error != null) "ParlanteY se desconectó" else "ParlanteY")
+            .setContentText(mensaje)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(mensaje))
+            .setContentIntent(abrir)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(ID_FIN, n)
     }
 
     private fun terminarSiInactivo(): Int {
@@ -165,8 +212,7 @@ class ServicioEmisor : Service() {
     override fun onDestroy() {
         supervisor?.detener()
         supervisor = null
-        principal.removeCallbacks(renovarWakeLock)
-        if (wakeLock.isHeld) wakeLock.release()
+        actualizarWakeLock(false)
         unregisterReceiver(cambiosBluetooth)
         alcance.cancel()
         super.onDestroy()
@@ -228,6 +274,7 @@ class ServicioEmisor : Service() {
 
         private const val CANAL = "enlace"
         private const val ID_NOTIFICACION = 1
+        private const val ID_FIN = 2
         private const val DURACION_WAKE_LOCK_MS = 10 * 60_000L
         private const val RENOVACION_WAKE_LOCK_MS = 60_000L
     }

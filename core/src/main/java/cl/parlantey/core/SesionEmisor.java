@@ -326,6 +326,27 @@ public final class SesionEmisor {
         return causa;
     }
 
+    /**
+     * Espera hasta {@code ms} a que termine el hilo lector (sin cerrar nada). Devuelve la causa, o
+     * null si sigue vivo.
+     */
+    public synchronized IOException esperarFin(long ms) {
+        long limite = System.nanoTime() + ms * 1000000L;
+        while (causa == null && hiloLector != null) {
+            long resto = (limite - System.nanoTime()) / 1000000L;
+            if (resto <= 0) {
+                break;
+            }
+            try {
+                wait(resto);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return causa;
+    }
+
     /** Lanza la causa si la sesión terminó. */
     public synchronized void comprobar() throws IOException {
         comprobarLector();
