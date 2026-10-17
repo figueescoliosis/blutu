@@ -1,0 +1,67 @@
+name: Release de APK
+
+# Compila y verifica los dos APK y los publica como release de GitHub.
+# Se lanza a mano: pestaña Actions → "Release de APK" → Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag de la release (por ejemplo v0.0.1)"
+        required: true
+        default: "v0.0.1"
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Componentes del SDK
+        run: |
+          # Sin pipefail: "yes" muere por SIGPIPE al terminar sdkmanager; cuenta el código de sdkmanager.
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
+
+      - name: Tests, lint, compilación y verificación del receptor
+        run: >-
+          ./gradlew --no-daemon
+          :core:testDebugUnitTest :core:lintDebug :receptor:lintDebug :emisor:lintDebug
+          :receptor:assembleDebug :emisor:assembleDebug :receptor:verificarApk
+
+      - name: Publicar la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          mkdir -p salida
+          cp receptor/build/outputs/apk/debug/receptor-debug.apk "salida/ParlanteY-receptor-$version.apk"
+          cp emisor/build/outputs/apk/debug/emisor-debug.apk "salida/ParlanteY-emisor-$version.apk"
+          (cd salida && sha256sum *.apk > SHA256SUMS.txt)
+          cat > notas.md <<NOTAS
+          APK de depuración de ParlanteY ($TAG), compilados desde el commit ${GITHUB_SHA::7}.
+
+          | Archivo | Teléfono |
+          |---|---|
+          | \`ParlanteY-receptor-$version.apk\` | Samsung Galaxy Y (Android 2.3, minSdk 9, firma v1) |
+          | \`ParlanteY-emisor-$version.apk\` | teléfono moderno (Android 8 o superior) |
+
+          **Emisor:** abre este enlace en el navegador del teléfono moderno, descarga el APK, tócalo y permite "instalar apps desconocidas".
+
+          **Galaxy Y:** su navegador (Android 2.3) no puede abrir GitHub, porque no soporta TLS 1.2. Descarga el APK en el PC o en el otro teléfono y pásalo por USB a la microSD, o instálalo con \`adb install -r\`. Antes activa Ajustes → Aplicaciones → Orígenes desconocidos.
+
+          Firmados con la clave de depuración compartida del repo (\`firma/\`). Las sumas SHA-256 están en \`SHA256SUMS.txt\`.
+          NOTAS
+          gh release create "$TAG" salida/* \
+            --target "$GITHUB_SHA" \
+            --title "ParlanteY $TAG" \
+            --notes-file notas.md \
+            --prerelease

@@ -31,6 +31,11 @@ android {
 
     signingConfigs {
         getByName("debug") {
+            // Clave de depuración compartida (firma/LEEME.md).
+            storeFile = rootProject.file("firma/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
             // Android 2.3 solo entiende la firma v1 (JAR, digests SHA-1).
             enableV1Signing = true
             enableV2Signing = true

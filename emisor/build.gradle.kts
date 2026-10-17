@@ -19,6 +19,16 @@ android {
         compose = true
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // Clave de depuración compartida (firma/LEEME.md).
+            storeFile = rootProject.file("firma/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
