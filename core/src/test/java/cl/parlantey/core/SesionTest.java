@@ -321,7 +321,7 @@ public class SesionTest {
         assertTrue(sesion.vencida(t0 + SesionEmisor.LIMITE_SILENCIO_NS + 1));
         ahora[0] = t0 + 3 * SesionEmisor.LIMITE_SILENCIO_NS;
         enviarState.countDown();
-        assertTrue(sesion.esperarEstado(5000));
+        assertTrue(sesion.esperarEstadoTras(0, 5000)); // aunque el STATE llegue antes de la llamada
         assertEquals(ahora[0], sesion.nanosUltimaTrama());
         assertTrue("una trama nueva reinicia el watchdog", !sesion.vencida(ahora[0] + 1));
         sesion.cerrar();

@@ -267,7 +267,8 @@ class Supervisor(
             }
             if (espera > 0) {
                 val hastaPing = (proximoPing - System.nanoTime()) / 1_000_000L
-                s.esperarEstado(minOf(espera, maxOf(1L, hastaPing)))
+                // Vuelve enseguida si llegó un STATE desde el último que se procesó.
+                s.esperarEstadoTras(estadosVistos, minOf(espera, maxOf(1L, hastaPing)))
             }
         }
     }

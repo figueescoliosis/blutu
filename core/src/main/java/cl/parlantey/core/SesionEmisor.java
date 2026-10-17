@@ -264,16 +264,29 @@ public final class SesionEmisor {
     }
 
     /**
-     * Espera hasta {@code ms} a que llegue un STATE nuevo. Devuelve true si llegó.
+     * Espera hasta {@code ms} a que llegue un STATE después de esta llamada. Devuelve true si llegó.
+     * Para no perder uno que llegó justo antes, usar {@link #esperarEstadoTras}.
      *
      * @throws IOException si la sesión terminó
      */
-    public synchronized boolean esperarEstado(long ms) throws IOException {
+    public boolean esperarEstado(long ms) throws IOException {
+        return esperarEstadoTras(estadosRecibidos(), ms);
+    }
+
+    /**
+     * Espera hasta {@code ms} a que {@link #estadosRecibidos()} sea distinto de {@code vistos} (el
+     * valor que leyó quien llama). Si ya es distinto, vuelve enseguida. Devuelve true si llegó.
+     *
+     * @throws IOException si la sesión terminó sin que llegara
+     */
+    public synchronized boolean esperarEstadoTras(long vistos, long ms) throws IOException {
+        if (estadosRecibidos != vistos) {
+            return true;
+        }
         comprobarLector();
-        long antes = estadosRecibidos;
         if (ms > 0) {
             long limite = System.nanoTime() + ms * 1000000L;
-            while (estadosRecibidos == antes && causa == null) {
+            while (estadosRecibidos == vistos && causa == null && !cerrada) {
                 long resto = (limite - System.nanoTime()) / 1000000L;
                 if (resto <= 0) {
                     break;
@@ -281,7 +294,7 @@ public final class SesionEmisor {
                 esperar(resto);
             }
         }
-        if (estadosRecibidos != antes) {
+        if (estadosRecibidos != vistos) {
             return true;
         }
         comprobarLector();

@@ -132,12 +132,13 @@ public class PuntaAPuntaTest {
                 sesion.enviarPing();
                 proximoPing = ahora + SesionEmisor.INTERVALO_PING_NS;
             }
+            long vistos = sesion.estadosRecibidos();
             long espera = pipeline.paso(ahora);
             if (espera == PipelineEmisor.FIN) {
                 return;
             }
             if (espera > 0) {
-                sesion.esperarEstado(espera);
+                sesion.esperarEstadoTras(vistos, espera);
             }
             sesion.comprobar();
         }
