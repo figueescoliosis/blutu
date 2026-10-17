@@ -20,10 +20,11 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -112,6 +113,12 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val comandos = Channel<Comando>(Channel.CONFLATED)
     private var sesion: Job? = null
+
+    /**
+     * Scope de los perros guardianes. No depende de la sesión ni de viewModelScope: si la sesión
+     * se cancela mientras está bloqueada en E/S, el plazo sigue corriendo y el socket se cierra.
+     */
+    private val vigilancia = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @Volatile private var conexionActual: ConexionReceptor? = null
 
     /**
@@ -227,7 +234,8 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         } catch (e: CancellationException) {
-            c.despedir() // desconexión pedida por el usuario o cierre de la app
+            // Desconexión pedida por el usuario o cierre de la app.
+            vigilado(c, TIEMPO_BYE_MS) { c.despedir() }
             throw e
         } catch (e: VersionIncompatibleException) {
             terminar(
@@ -237,9 +245,10 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: ByeRecibidoException) {
             terminar("El receptor cerró la sesión (código ${e.codigo}).")
         } catch (e: IOException) {
-            if (!currentCoroutineContext().isActive) return // cancelada mientras conectaba
+            if (!currentCoroutineContext().isActive) return // cancelada: el usuario ya se desconectó
             terminar(
                 when {
+                    adaptador?.isEnabled == false -> "El Bluetooth de este teléfono está apagado."
                     etapa == "conectar" ->
                         "No se pudo conectar con ${d.nombre}. ¿Está abierto ParlanteY Receptor en el Galaxy Y? " +
                             "(${e.message})"
@@ -258,13 +267,13 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
      * Ejecuta [bloque] (E/S bloqueante) y, si tarda más de [ms], cierra la conexión para que
      * falle con IOException en vez de colgarse.
      */
-    private suspend fun <T> vigilado(c: ConexionReceptor, ms: Long, bloque: () -> T): T = coroutineScope {
-        val perro = launch {
+    private fun <T> vigilado(c: ConexionReceptor, ms: Long, bloque: () -> T): T {
+        val perro = vigilancia.launch {
             delay(ms)
             c.cerrarPorTiempo()
         }
         try {
-            bloque()
+            return bloque()
         } finally {
             perro.cancel()
         }
@@ -318,6 +327,7 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
         private const val INTERVALO_PING_MS = 1_000L
         private const val TIEMPO_PING_MS = 5_000L
         private const val TIEMPO_PRUEBA_MS = 40_000L
+        private const val TIEMPO_BYE_MS = 2_000L
         private val FORMATO_HORA = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     }
 }

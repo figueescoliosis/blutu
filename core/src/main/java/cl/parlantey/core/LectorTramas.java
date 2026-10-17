@@ -88,7 +88,9 @@ public final class LectorTramas {
         int leidos = 0;
         while (leidos < n) {
             int r = entrada.read(destino, leidos, n - leidos);
-            if (r < 0) {
+            // Con n - leidos > 0, un 0 no es avance: el BluetoothInputStream de 2.3 puede
+            // devolverlo al llegar al fin del flujo. Tratarlo como EOF evita un bucle sin fin.
+            if (r <= 0) {
                 throw new EOFException(destino == cabecera && leidos == 0
                         ? "conexión cerrada"
                         : "el flujo terminó a mitad de una trama");

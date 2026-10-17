@@ -78,13 +78,19 @@ abstract class VerificarApk : DefaultTask() {
             ?.singleOrNull() ?: throw GradleException("no hay un único APK en ${carpetaApk.get()}")
         val windows = System.getProperty("os.name").lowercase().contains("windows")
         val herramientas = File(buildTools.get())
-        val apksigner = File(herramientas, if (windows) "apksigner.bat" else "apksigner")
+        val apksigner = File(herramientas, "lib/apksigner.jar")
         val aapt2 = File(herramientas, if (windows) "aapt2.exe" else "aapt2")
         for (f in listOf(apksigner, aapt2)) {
             if (!f.exists()) throw GradleException("falta $f (instala build-tools ${herramientas.name} con el SDK Manager)")
         }
+        // apksigner.jar con el mismo JDK que corre Gradle: no depende de JAVA_HOME ni del PATH
+        // (en Windows, Android Studio no siempre los define).
+        val java = File(System.getProperty("java.home"), if (windows) "bin/java.exe" else "bin/java")
 
-        val firma = ejecutar(apksigner.path, "verify", "--min-sdk-version", minSdk.get().toString(), "--verbose", apk.path)
+        val firma = ejecutar(
+            java.path, "-jar", apksigner.path,
+            "verify", "--min-sdk-version", minSdk.get().toString(), "--verbose", apk.path,
+        )
         logger.lifecycle(firma.trim())
         if (!firma.lineSequence().any { it.trim() == "Verified using v1 scheme (JAR signing): true" }) {
             throw GradleException("el APK no tiene una firma v1 válida")
@@ -128,7 +134,7 @@ abstract class VerificarApk : DefaultTask() {
         }
         val texto = salida.toString(Charsets.UTF_8)
         if (resultado.exitValue != 0) {
-            throw GradleException("${File(comando[0]).name} terminó con código ${resultado.exitValue}:\n$texto")
+            throw GradleException("${comando.joinToString(" ")} terminó con código ${resultado.exitValue}:\n$texto")
         }
         return texto
     }

@@ -101,9 +101,11 @@ public class SesionTest {
         assertTrue(r.duracionReceptorMs >= 250 && r.duracionReceptorMs <= r.duracionEmisorMs);
         assertTrue(r.kBpsReceptor() > 0 && r.kBpsEmisor() > 0);
 
-        // Una segunda prueba en la misma conexión cuenta desde cero.
+        // Una segunda prueba en la misma conexión cuenta desde cero: bytes y duración.
         ResultadoPrueba r2 = sesion.probarEnlace(1, 50, 100);
         assertEquals(r2.bytesEnviados, r2.bytesRecibidos);
+        assertTrue("la duración no debe arrastrar la prueba anterior",
+                r2.duracionReceptorMs < r.duracionReceptorMs && r2.duracionReceptorMs <= r2.duracionEmisorMs);
 
         sesion.despedir(Protocolo.BYE_NORMAL);
         assertEquals(Protocolo.BYE_NORMAL, esperarReceptor());
@@ -121,6 +123,42 @@ public class SesionTest {
         assertTrue(sesion.ping() > 0);
         sesion.despedir(Protocolo.BYE_NORMAL);
         assertEquals(Protocolo.BYE_NORMAL, esperarReceptor());
+    }
+
+    @Test(timeout = 20000)
+    public void emisorDescartaPongViejosYTramasDesconocidas() throws Exception {
+        arrancarReceptor(s -> {
+            EscritorTramas e = new EscritorTramas(s.getOutputStream());
+            LectorTramas l = new LectorTramas(s.getInputStream());
+            e.hello(HELLO);
+            // ping() suelto y el PING con que empieza probarEnlace(1, ...).
+            for (int i = 0; i < 2; i++) {
+                assertEquals(Protocolo.PING, l.leer());
+                long t = l.datos().readLong();
+                e.pong(t - 1); // PONG de un PING anterior: debe descartarse
+                s.getOutputStream().write(new byte[] {0x50, 0x59, 0x06, 0x00, 0, 0, 0, 2, 7, 7}); // tipo futuro
+                e.pong(t);
+            }
+            long bytes = 0;
+            while (true) {
+                assertEquals(Protocolo.TEST_DATA, l.leer());
+                bytes += Protocolo.LARGO_CABECERA + l.largo();
+                if ((l.flags() & Protocolo.FLAG_ULTIMA) != 0) {
+                    break;
+                }
+            }
+            s.getOutputStream().write(new byte[] {0x50, 0x59, 0x7F, 0x00, 0, 0, 0, 0}); // antes del resultado
+            e.testResult(bytes, 42);
+            return null;
+        });
+        SesionEmisor sesion = conectar();
+        sesion.esperarHello();
+        assertTrue(sesion.ping() > 0);
+        ResultadoPrueba r = sesion.probarEnlace(1, 20, 100);
+        assertEquals(1, r.pings);
+        assertEquals(r.bytesEnviados, r.bytesRecibidos);
+        assertEquals(42, r.duracionReceptorMs);
+        assertNull(esperarReceptor());
     }
 
     @Test(timeout = 20000)

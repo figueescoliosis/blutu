@@ -2,9 +2,12 @@ package cl.parlantey.emisor
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -17,6 +20,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cl.parlantey.emisor.ui.Acciones
 import cl.parlantey.emisor.ui.Pantalla
@@ -31,6 +35,11 @@ class MainActivity : ComponentActivity() {
 
     private val pedirEncender =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.refrescar() }
+
+    /** Encender o apagar el Bluetooth desde Ajustes rápidos no pausa la Activity. */
+    private val cambiosBluetooth = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = vm.refrescar()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -56,9 +65,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        ContextCompat.registerReceiver(
+            this,
+            cambiosBluetooth,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
     override fun onResume() {
         super.onResume()
         vm.refrescar()
+    }
+
+    override fun onStop() {
+        unregisterReceiver(cambiosBluetooth)
+        super.onStop()
     }
 
     /** BLUETOOTH_CONNECT es un permiso de runtime solo desde API 31; antes basta el manifiesto. */

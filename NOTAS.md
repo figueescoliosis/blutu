@@ -20,8 +20,9 @@ Aquí van las mediciones y pruebas en dispositivo de cada fase. Lo que dice `[PE
 ### Verificación sin dispositivo (contenedor Linux, 2026-10-17)
 
 - **Tests JVM de core**:
-  - `./gradlew :core:testDebugUnitTest` → 26 tests, 0 fallas (`TramasTest` 18, `SesionTest` 8).
-  - `SesionTest` hace la sesión completa emisor ↔ receptor sobre TCP de loopback: HELLO, pings, prueba de enlace con bytes exactos, versión distinta → BYE(1), trama corrupta, payload corto y corte sin BYE.
+  - `./gradlew :core:testDebugUnitTest` → 30 tests, 0 fallas (`TramasTest` 21, `SesionTest` 9).
+  - `TramasTest` incluye HELLO byte a byte y `read()` que devuelve 0 (tratado como EOF).
+  - `SesionTest` hace la sesión completa emisor ↔ receptor sobre TCP de loopback: HELLO, pings, prueba de enlace con bytes exactos, segunda prueba que cuenta desde cero, PONG viejos y tramas desconocidas descartados, versión distinta → BYE(1), trama corrupta, payload corto y corte sin BYE.
 - **Lint**: `:core:lintDebug :receptor:lintDebug :emisor:lintDebug` → *No issues found* en los tres.
   - Para comprobar que NewApi/InlinedApi funcionan como error, se agregaron violaciones a propósito y lint las marcó como error:
     - `StandardCharsets` (API 19), `java.time` (26) y streams (24) en core.
@@ -33,7 +34,7 @@ Aquí van las mediciones y pruebas en dispositivo de cada fase. Lo que dice `[PE
   Verified using v1 scheme (JAR signing): true
   Verified using v2 scheme (APK Signature Scheme v2): true
   Number of signers: 1
-  minSdkVersion:'9' · dex 035 (classes.dex) · sin Kotlin ni AndroidX · 50553 bytes
+  minSdkVersion:'9' · dex 035 (classes.dex) · sin Kotlin ni AndroidX · 50554 bytes
   OK: receptor-debug.apk apto para Android 2.3 (API 9)
   ```
   Los digests v1 de `META-INF/MANIFEST.MF` son SHA-1, como exige Android < 4.3.
@@ -42,7 +43,7 @@ Aquí van las mediciones y pruebas en dispositivo de cada fase. Lo que dice `[PE
   - Contra **API 9**: falta solo `BluetoothAdapter.listenUsingInsecureRfcommWithServiceRecord`, que está detrás de `SDK_INT >= 10`.
 - **Dependencias del receptor**:
   - `./gradlew :receptor:dependencies --configuration debugRuntimeClasspath` (y `releaseRuntimeClasspath`) → solo `project ':core'`.
-  - El informe completo de `:receptor:dependencies` sí nombra kotlin-stdlib, pero solo en configuraciones de herramientas de AGP 9: `androidLintTool`, `kotlinBuildToolsApiClasspath`, `kotlinCompilerClasspath` y `unified-test-platform…`. Pasa igual en un módulo Java puro con `enableKotlin = false`.
+  - El informe completo de `:receptor:dependencies` sí nombra kotlin-stdlib, pero solo en configuraciones de herramientas de AGP 9: `androidLintTool`, `kotlinAbiValidationCompatClasspath`, `kotlinBuildToolsApiClasspath`, `kotlinCompilerClasspath` y `unified-test-platform-gradle-work-action`. Pasa igual en un módulo Java puro con `enableKotlin = false`, porque lint está escrito en Kotlin y AGP 9 siempre aplica la base de su Kotlin integrado.
   - Ninguna configuración de la app trae Kotlin ni AndroidX, y `verificarApk` confirma que el dex no referencia `Lkotlin/` ni `Landroidx/`.
 - **Avisos conocidos del build**, que no vienen del proyecto:
   - AGP 9.4.1 usa `Configuration.setVisible` (deprecado en Gradle 9, se elimina en 11).

@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -30,6 +32,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import cl.parlantey.emisor.Dispositivo
@@ -59,12 +62,13 @@ data class Acciones(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Pantalla(ui: UiEstado, acciones: Acciones) {
+    val direccion = LocalLayoutDirection.current
     Scaffold(topBar = { TopAppBar(title = { Text("ParlanteY · Emisor") }) }) { relleno ->
         LazyColumn(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
+                start = relleno.calculateStartPadding(direccion) + 16.dp,
+                end = relleno.calculateEndPadding(direccion) + 16.dp,
                 top = relleno.calculateTopPadding() + 8.dp,
                 bottom = relleno.calculateBottomPadding() + 16.dp,
             ),

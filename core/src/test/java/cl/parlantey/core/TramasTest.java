@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Arrays;
 
 import org.junit.Test;
@@ -39,6 +40,34 @@ public class TramasTest {
         escritor.ping(0x0102030405060708L);
         byte[] esperado = {0x50, 0x59, 0x07, 0x00, 0x00, 0x00, 0x00, 0x08, 1, 2, 3, 4, 5, 6, 7, 8};
         assertArrayEquals(esperado, bytes.toByteArray());
+    }
+
+    @Test
+    public void helloEnBytesSegunProtocolo() throws IOException {
+        escritor.hello(new Hello(Protocolo.VERSION, 10, "x", 2, 4000));
+        byte[] esperado = {
+                0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0B, // cabecera, largo 11
+                0x01, // versión
+                0x00, 0x0A, // apiLevel
+                0x00, 0x01, 'x', // nombre UTF
+                0x02, // maxCanales
+                0x00, 0x00, 0x0F, (byte) 0xA0}; // capacidadBufferMs = 4000
+        assertArrayEquals(esperado, bytes.toByteArray());
+    }
+
+    @Test
+    public void helloDeOtraVersionSeRechazaLeyendoSoloElPrimerByte() throws IOException {
+        // Un HELLO "v2" con un formato que la v1 no entiende: solo importa el primer byte.
+        byte[] trama = {0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x02, (byte) 0xFF, (byte) 0xFF};
+        LectorTramas l = lector(trama);
+        assertEquals(Protocolo.HELLO, l.leer());
+        try {
+            Hello.leer(l.datos());
+            fail("debió rechazar la versión 2");
+        } catch (VersionIncompatibleException e) {
+            assertEquals(2, e.versionRemota);
+            assertEquals("no debe leer más allá de la versión", 2, l.datos().available());
+        }
     }
 
     @Test
@@ -210,6 +239,35 @@ public class TramasTest {
             } catch (EOFException esperada) {
                 // ok
             }
+        }
+    }
+
+    @Test(timeout = 5000)
+    public void readQueDevuelveCeroSeTrataComoFinDelFlujo() throws IOException {
+        // Un flujo que, tras 3 bytes, devuelve 0 para siempre (como algunos stacks Bluetooth de 2.3).
+        InputStream ceros = new InputStream() {
+            private int entregados;
+
+            @Override
+            public int read() {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public int read(byte[] b, int desde, int n) {
+                if (entregados >= 3) {
+                    return 0;
+                }
+                b[desde] = (byte) (entregados == 0 ? 0x50 : 0x59);
+                entregados++;
+                return 1;
+            }
+        };
+        try {
+            new LectorTramas(ceros).leer();
+            fail("debió lanzar EOFException");
+        } catch (EOFException esperada) {
+            assertEquals("el flujo terminó a mitad de una trama", esperada.getMessage());
         }
     }
 
