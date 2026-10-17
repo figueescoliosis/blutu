@@ -27,6 +27,54 @@ public final class EscritorTramas {
         enviar(Protocolo.HELLO, 0);
     }
 
+    public synchronized void config(Config config) throws IOException {
+        empezar();
+        config.escribir(datos);
+        enviar(Protocolo.CONFIG, 0);
+    }
+
+    /**
+     * AUDIO: {@code seq u32} y el bloque ADPCM {@code bloque[desde, desde + largo)}. Copia el
+     * bloque al buffer de la trama: no asigna memoria.
+     */
+    public synchronized void audio(long seq, byte[] bloque, int desde, int largo) throws IOException {
+        Rangos.u32(seq, "seq");
+        if (largo < 0 || largo > Protocolo.MAX_PAYLOAD - 4) {
+            throw new IllegalArgumentException("largo de bloque fuera de rango: " + largo);
+        }
+        empezar();
+        datos.writeInt((int) seq);
+        trama.write(bloque, desde, largo);
+        enviar(Protocolo.AUDIO, 0);
+    }
+
+    public synchronized void track(Track track) throws IOException {
+        empezar();
+        track.escribir(datos);
+        enviar(Protocolo.TRACK, 0);
+    }
+
+    public synchronized void control(int comando) throws IOException {
+        Rangos.u8(comando, "comando");
+        empezar();
+        datos.writeByte(comando);
+        enviar(Protocolo.CONTROL, 0);
+    }
+
+    /** STATE con primitivos: el receptor lo envía cada 250 ms sin crear objetos. */
+    public synchronized void state(long bufferMs, long cortes, long ultimoSeq, boolean reproduciendo)
+            throws IOException {
+        Rangos.u32(bufferMs, "bufferMs");
+        Rangos.u32(cortes, "cortes");
+        Rangos.u32(ultimoSeq, "ultimoSeq");
+        empezar();
+        datos.writeInt((int) bufferMs);
+        datos.writeInt((int) cortes);
+        datos.writeInt((int) ultimoSeq);
+        datos.writeByte(reproduciendo ? 1 : 0);
+        enviar(Protocolo.STATE, 0);
+    }
+
     public synchronized void ping(long timestamp) throws IOException {
         empezar();
         datos.writeLong(timestamp);
@@ -60,7 +108,7 @@ public final class EscritorTramas {
     }
 
     public synchronized void bye(int codigo) throws IOException {
-        Hello.validarU8(codigo, "código");
+        Rangos.u8(codigo, "código");
         empezar();
         datos.writeByte(codigo);
         enviar(Protocolo.BYE, 0);

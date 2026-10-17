@@ -30,8 +30,13 @@ public final class Protocolo {
     /** Largo máximo del payload de una trama (64 KiB). */
     public static final int MAX_PAYLOAD = 64 * 1024;
 
-    // Tipos de trama implementados en la Fase 0. El resto de la tabla está en PROTOCOLO.md.
+    // Tipos de trama.
     public static final int HELLO = 0x01;
+    public static final int CONFIG = 0x02;
+    public static final int AUDIO = 0x03;
+    public static final int TRACK = 0x04;
+    public static final int CONTROL = 0x05;
+    public static final int STATE = 0x06;
     public static final int PING = 0x07;
     public static final int PONG = 0x08;
     public static final int TEST_DATA = 0x09;
@@ -45,4 +50,25 @@ public final class Protocolo {
     public static final int BYE_NORMAL = 0;
     public static final int BYE_VERSION = 1;
     public static final int BYE_PROTOCOLO = 2;
+
+    // Comandos de CONTROL.
+    public static final int CONTROL_PAUSA = 1;
+    public static final int CONTROL_REANUDAR = 2;
+    public static final int CONTROL_VACIAR = 3;
+    public static final int CONTROL_DETENER = 4;
+
+    /** Único códec de CONFIG. */
+    public static final int CODEC_IMA_ADPCM = 1;
+
+    /** Muestras por canal en cada bloque ADPCM. */
+    public static final int MUESTRAS_POR_BLOQUE = 1024;
+
+    /** Rango de sampleRate que acepta AudioTrack en Android 2.3. */
+    public static final int TASA_MIN = 4000;
+    public static final int TASA_MAX = 48000;
+
+    public static final int MAX_CANALES = 2;
+
+    /** ultimoSeq de STATE antes de recibir el primer AUDIO (equivale a −1 en u32). */
+    public static final long SEQ_NINGUNO = 0xFFFFFFFFL;
 }

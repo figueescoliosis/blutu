@@ -3,21 +3,25 @@
 Fuente de verdad del protocolo entre el **emisor** (Android 8+) y el **receptor** (Galaxy Y, Android 2.3).
 Todo cambio exige: actualizar este archivo + los tests de `core` + `Protocolo.VERSION` (y el historial al final).
 
-Implementación: `core/src/main/java/cl/parlantey/core/` (`Protocolo`, `LectorTramas`, `EscritorTramas`, `Hello`, `SesionEmisor`, `SesionReceptor`).
+Implementación: `core/src/main/java/cl/parlantey/core/`.
+- Tramas: `Protocolo`, `LectorTramas`, `EscritorTramas`.
+- Mensajes: `Hello`, `Config`, `Track`, `Estado`, `Seq`.
+- Códec: `ImaAdpcm`, `CodificadorIma`.
+- Sesiones: `SesionEmisor`, `SesionReceptor`.
 
 ## Estado de implementación
 
-| Tipo | Fase 0 | Pendiente |
+| Tipo | Lectura y escritura en `core` | Uso en las apps |
 |---|---|---|
-| 0x01 HELLO | ✅ | |
-| 0x02 CONFIG | | Fase 1 |
-| 0x03 AUDIO | | Fase 1 |
-| 0x04 TRACK | | Fase 1 |
-| 0x05 CONTROL | | Fase 1 |
-| 0x06 STATE | | Fase 1 |
-| 0x07 PING / 0x08 PONG | ✅ | |
-| 0x09 TEST_DATA / 0x0A TEST_RESULT | ✅ | |
-| 0x0B BYE | ✅ | |
+| 0x01 HELLO | ✅ Fase 0 | ✅ Fase 0 |
+| 0x02 CONFIG | ✅ Fase 1 | Fase 2 (receptor) y 3 (emisor) |
+| 0x03 AUDIO | ✅ Fase 1 | Fase 2 y 3 |
+| 0x04 TRACK | ✅ Fase 1 | Fase 2 y 3 |
+| 0x05 CONTROL | ✅ Fase 1 | Fase 2 y 3 |
+| 0x06 STATE | ✅ Fase 1 | Fase 2 y 3 |
+| 0x07 PING / 0x08 PONG | ✅ Fase 0 | ✅ Fase 0 |
+| 0x09 TEST_DATA / 0x0A TEST_RESULT | ✅ Fase 0 | ✅ Fase 0 |
+| 0x0B BYE | ✅ Fase 0 | ✅ Fase 0 |
 
 ## 1. Transporte
 
@@ -59,7 +63,9 @@ Implementación: `core/src/main/java/cl/parlantey/core/` (`Protocolo`, `LectorTr
    - Si no es igual a la suya, envía **BYE(1)**, cierra la conexión y muestra el error. El receptor, al recibir BYE(1), también muestra el error.
    - Si la primera trama no es HELLO, el emisor cierra la conexión (error de protocolo).
 4. Sigue el intercambio de tramas. En la Fase 0, el emisor envía un PING por segundo mientras está inactivo, como keepalive y para medir el RTT en vivo.
-5. Cualquiera de los dos puede cerrar con **BYE(código)**. Si la conexión se pierde, el receptor vuelve a `accept()` solo.
+5. Para reproducir, el emisor envía **CONFIG**, luego **TRACK** (opcional) y después **AUDIO** sin parar. El receptor contesta **STATE** cada 250 ms.
+   - Cambio de pista: CONTROL VACIAR → TRACK → CONFIG (solo si cambian tasa o canales) → AUDIO.
+6. Cualquiera de los dos puede cerrar con **BYE(código)**. Si la conexión se pierde, el receptor vuelve a `accept()` solo.
 
 ## 5. Tipos
 
@@ -86,6 +92,66 @@ Implementación: `core/src/main/java/cl/parlantey/core/` (`Protocolo`, `LectorTr
 | nombre | UTF | nombre Bluetooth del receptor (o `Build.MODEL` si no hay) |
 | maxCanales | u8 | `2` |
 | capacidadBufferMs | u32 | `4000` |
+
+### 0x02 CONFIG (E→R)
+
+Payload de 12 bytes:
+
+| Campo | Tipo | Válido |
+|---|---|---|
+| códec | u8 | `1` (IMA ADPCM, §6) |
+| sampleRate | u32 | 4000 a 48 000 Hz (lo que acepta `AudioTrack` en Android 2.3) |
+| canales | u8 | 1 o 2 |
+| muestrasPorBloque | u16 | par, ≥ 2, y el AUDIO resultante debe caber en 64 KiB. El emisor usa **1024**. |
+| bufferObjetivoMs | u32 | nivel de buffer que debe mantener el receptor (Archivos 2000 ms, Todo el audio 500 ms) |
+
+- Un valor fuera de rango es error de protocolo: BYE(2) y cierre.
+- Cada CONFIG nuevo reemplaza al anterior. Si cambian la tasa o los canales, el receptor vacía la cola y recrea `AudioTrack`.
+
+### 0x03 AUDIO (E→R)
+
+| Campo | Tipo |
+|---|---|
+| seq | u32 |
+| bloque | `canales × (4 + muestrasPorBloque / 2)` bytes (§6) |
+
+- **El largo del payload debe ser exactamente `4 + bytesBloque`** del CONFIG vigente: 520 bytes en mono y 1036 en estéreo con bloques de 1024 muestras. Si no coincide, es error de protocolo: BYE(2) y cierre.
+- **AUDIO sin CONFIG vigente** (antes del primero o tras DETENER) se descarta en silencio.
+- **seq:**
+  - Empieza en 0 al conectar y sube 1 por AUDIO enviado.
+  - Da la vuelta en 2³² (`Seq.siguiente`).
+  - No se reinicia con VACIAR ni con un CONFIG nuevo.
+
+### 0x04 TRACK (E→R)
+
+Título UTF, artista UTF y duraciónMs u32 (0 = en vivo). Solo informa a la UI del receptor y no afecta el audio.
+
+### 0x05 CONTROL (E→R)
+
+| cmd | Efecto en el receptor |
+|---|---|
+| 1 PAUSA | Pausa `AudioTrack` y conserva la cola. |
+| 2 REANUDAR | Reanuda. |
+| 3 VACIAR | Descarta la cola, hace `flush()` de `AudioTrack`, conserva el CONFIG y vuelve a llenar hasta el 70 % del objetivo antes de sonar. |
+| 4 DETENER | Lo mismo que VACIAR, más `stop()`. Olvida el CONFIG: el siguiente audio necesita un CONFIG nuevo. |
+
+Un comando desconocido se ignora, para que versiones futuras puedan agregar comandos.
+
+### 0x06 STATE (R→E, cada 250 ms)
+
+Payload de 13 bytes:
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| bufferMs | u32 | bloques en cola × ms por bloque + (frames escritos − `getPlaybackHeadPosition()`) en ms |
+| cortes | u32 | veces que la cola se vació mientras sonaba, desde que se conectó |
+| ultimoSeq | u32 | seq del último AUDIO **recibido**. Antes del primero vale `0xFFFFFFFF` (`Protocolo.SEQ_NINGUNO`, equivale a −1). |
+| reproduciendo | u8 | 1 si `AudioTrack` está sonando; 0 si no. Al recibir, cualquier valor ≠ 0 cuenta como 1. |
+
+**Control de flujo en el emisor:**
+- `nivel = STATE.bufferMs + Seq.distancia(seqEnviado, STATE.ultimoSeq) × ms por bloque`, donde `seqEnviado` es el seq del último AUDIO enviado. `Seq.distancia` hace la resta en u32, así que vale aunque el contador haya dado la vuelta.
+- Se envía mientras el nivel sea menor que el objetivo.
+- **No sirve basarse en que `write()` bloquee.** En la Fase 0 el emisor (Android 16) aceptó ~1,5 MB en el socket sin bloquear (NOTAS.md).
 
 ### 0x07 PING / 0x08 PONG
 
@@ -114,29 +180,57 @@ Implementación: `core/src/main/java/cl/parlantey/core/` (`Protocolo`, `LectorTr
 
 Tras enviar o recibir BYE, la conexión se cierra.
 
-## 6. Bloque IMA ADPCM (payload de AUDIO tras `seq`) — se implementa en la Fase 1
+## 6. Bloque IMA ADPCM (payload de AUDIO tras `seq`)
 
-- Cada bloque se puede decodificar de forma aislada.
-- Primero, por canal: `predictor i16, índicePaso u8, reservado u8` (estado del códec al inicio del bloque).
-- Luego, por canal y en forma planar: `muestrasPorBloque / 2` bytes. En cada byte, el nibble bajo es la muestra anterior.
-- `muestrasPorBloque` = 1024.
-- Tablas IMA estándar (89 pasos + tabla de ajuste de índice). Predictor saturado a int16, índice a 0..88. El codificador replica el estado del decodificador.
-- Tamaño de una trama AUDIO: 8 (cabecera) + 4 (seq) + canales × (4 + 512) bytes.
-  - Mono: 528 bytes por 1024 muestras.
-  - Estéreo: 1044 bytes.
+Implementación: `ImaAdpcm` (tablas y decodificador) y `CodificadorIma`.
 
-  Con eso, a 48 kHz el flujo ocupa ≈ 24,8 KB/s en mono y ≈ 48,9 KB/s en estéreo; Segura (mono, 24 kHz) ≈ 12,4 KB/s.
+```
+ por canal c = 0..canales-1:   predictor i16 (big-endian) | índice u8 | reservado u8 (= 0)
+ por canal c = 0..canales-1:   muestrasPorBloque / 2 bytes; byte j = muestra 2j (nibble bajo) | muestra 2j+1 (nibble alto)
+```
 
-  Con la regla del 70 %, la prueba de enlace debe medir al menos:
+- **La cabecera es el estado del códec *antes* de la primera muestra** del bloque, y las `muestrasPorBloque` muestras van todas como nibbles.
+  - Ojo: en el IMA ADPCM de WAV de Microsoft, la cabecera **es** la primera muestra. Aquí no.
+- Cada bloque se puede decodificar de forma aislada desde su cabecera, y el resultado es idéntico al de decodificarlo en secuencia. El codificador escribe en la cabecera el estado con que empieza y lo actualiza con la misma reconstrucción que el decodificador.
+- Si al recibir el índice de la cabecera vale más de 88, se limita a 88. El decodificador nunca falla por datos corruptos.
+- El último bloque de una pista se completa con silencio: muestras 0 codificadas normalmente.
+- Al empezar una pista, el codificador parte de predictor 0 e índice 0.
+- **Tablas IMA estándar:**
+  - `PASOS` = 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767.
+  - `AJUSTE` = −1, −1, −1, −1, 2, 4, 6, 8 (se repite para los nibbles 8–15).
 
-  | Preset | KB/s medidos |
-  |---|---|
-  | Segura | ≥ 17,7 |
-  | Normal | ≥ 35,4 |
-  | Alta | ≥ 69,9 |
+**Decodificación de un nibble `n`** (el codificador usa la misma reconstrucción):
+
+```
+paso = PASOS[indice]
+dif  = paso >> 3
+si n & 4: dif += paso
+si n & 2: dif += paso >> 1
+si n & 1: dif += paso >> 2
+predictor = saturar_int16(n & 8 ? predictor − dif : predictor + dif)
+indice    = limitar(indice + AJUSTE[n], 0, 88)
+muestra   = predictor
+```
+
+**Cuantización del codificador** (IMA de referencia): `diff = x − predictor`. Si `diff < 0`, se pone el bit 8 y se usa `−diff`. Luego se ponen los bits 4, 2 y 1 si `diff` supera `paso`, `paso/2` y `paso/4`, restando cada vez.
+
+**Tamaño de una trama AUDIO:** 8 (cabecera) + 4 (seq) + canales × (4 + 512) bytes.
+- Mono: 528 bytes por 1024 muestras.
+- Estéreo: 1044 bytes.
+
+A 48 kHz el flujo ocupa ≈ 24,8 KB/s en mono y ≈ 48,9 KB/s en estéreo; Segura (mono, 24 kHz) ≈ 12,4 KB/s.
+
+Con la regla del 70 %, la prueba de enlace debe medir al menos:
+
+| Preset | KB/s medidos |
+|---|---|
+| Segura | ≥ 17,7 |
+| Normal | ≥ 35,4 |
+| Alta | ≥ 69,9 |
 
 ## Historial
 
 | Versión | Fecha | Cambios |
 |---|---|---|
 | 1 | 2026-10-17 | Versión inicial. En la Fase 0 se implementan HELLO, PING/PONG, TEST_DATA/TEST_RESULT y BYE. |
+| 1 | 2026-10-17 | Precisiones de la Fase 1, sin cambios de formato: semántica de CONFIG, AUDIO, TRACK, CONTROL y STATE; `ultimoSeq` y control de flujo; el bloque ADPCM al detalle (predictor big-endian, cabecera = estado antes de la primera muestra, relleno del último bloque). Se implementan en `core` todas las tramas. |

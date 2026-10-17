@@ -112,3 +112,35 @@ La primera prueba (marcada «?») se hizo con el **Wi-Fi del Galaxy Y encendido*
 
 - **Preset Auto: Alta.** El flujo Alta ocupa ≈ 48,9 KB/s, el 30 % de lo medido.
 - **No hace falta adelantar el transporte TCP (Fase 5):** Segura se supera por casi 10×.
+
+## Fase 1 — core completo
+
+Verificación sin dispositivo (contenedor Linux, 2026-10-17). Esta fase no cambia las apps, así que no hay nada que probar en los teléfonos.
+
+### Criterios ✅
+
+| Criterio | Test | Resultado |
+|---|---|---|
+| ① Ida y vuelta de cada tipo de trama | `TramasTest` (6 tipos de la Fase 0) y `MensajesTest` (CONFIG, AUDIO, TRACK, CONTROL, STATE byte a byte y con valores extremos; los 11 tipos en un mismo flujo) | ✓ |
+| ② Trama corrupta rechazada | magic, largo, truncada, `read()=0`, payload corto de cada tipo y valores inválidos de CONFIG → `ProtocoloException` | ✓ |
+| ③ SNR ≥ 20 dB (seno 1 kHz, −6 dBFS, 44,1 kHz) | `ImaAdpcmTest.snrSeno*` | ✓ **36,2 dB** en mono; **36,2 y 34,3 dB** por canal en estéreo |
+| ④ Bloque aislado = en secuencia | `ImaAdpcmTest.bloqueAisladoIgualQueEnSecuencia`, 12 bloques en mono y en estéreo; cada cabecera coincide con el estado arrastrado | ✓ |
+| ⑤ Salida determinista | Codificar dos veces da bytes idénticos; los CRC32 del codificador, del decodificador, del decimador y del downmix coinciden con una **implementación independiente en Python** (`herramientas/referencia_core.py`) | ✓ |
+
+Total: **79 tests JVM, 0 fallas** (`./gradlew :core:testDebugUnitTest`).
+
+### Otras mediciones
+- **Decimador ×2** (FIR de media banda de 47 coeficientes, Kaiser β = 7, Q15):
+  - diseño: ≥ 69 dB de atenuación entre 0,3 y 0,5 fs y rizado ≤ 0,003 dB entre 0 y 0,2 fs;
+  - medido: un tono a 0,1 fs pasa con −0,000 dB y uno a 0,35 fs queda en **−83,4 dB**;
+  - ganancia DC exacta; procesar por trozos de cualquier largo da lo mismo que procesar todo junto.
+- **Sin asignaciones de memoria** (`SinAsignacionesTest`, ThreadMXBean, 2000 repeticiones): **0 bytes** en
+  - decodificar y codificar bloques;
+  - decimador + downmix;
+  - escribir AUDIO/STATE;
+  - leer AUDIO.
+- **Rendimiento del decodificador en la JVM** (solo referencia): ~560× tiempo real a 48 kHz estéreo. La medición en el Galaxy Y (Dalvik con JIT, ARMv6) va en la Fase 2.
+- **Lint:** sin problemas en core, receptor y emisor.
+- **Contra el SDK real:** el APK del receptor (71 888 bytes) ya incluye el códec, el decimador y el downmix.
+  - `herramientas/verificar_api.py` contra API 10: 91 referencias, **0 faltantes**.
+  - Contra API 9 falta solo el socket insecure, que está protegido con `SDK_INT >= 10`.

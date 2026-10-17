@@ -18,17 +18,13 @@ public final class Hello {
     public final long capacidadBufferMs;
 
     public Hello(int version, int apiLevel, String nombre, int maxCanales, long capacidadBufferMs) {
-        validarU8(version, "versión");
-        if (apiLevel < 0 || apiLevel > 0xFFFF) {
-            throw new IllegalArgumentException("apiLevel fuera de rango: " + apiLevel);
-        }
+        Rangos.u8(version, "versión");
+        Rangos.u16(apiLevel, "apiLevel");
         if (nombre == null) {
             throw new IllegalArgumentException("nombre nulo");
         }
-        validarU8(maxCanales, "maxCanales");
-        if (capacidadBufferMs < 0 || capacidadBufferMs > 0xFFFFFFFFL) {
-            throw new IllegalArgumentException("capacidadBufferMs fuera de rango: " + capacidadBufferMs);
-        }
+        Rangos.u8(maxCanales, "maxCanales");
+        Rangos.u32(capacidadBufferMs, "capacidadBufferMs");
         this.version = version;
         this.apiLevel = apiLevel;
         this.nombre = nombre;
@@ -60,12 +56,6 @@ public final class Hello {
         int maxCanales = d.readUnsignedByte();
         long capacidadBufferMs = d.readInt() & 0xFFFFFFFFL;
         return new Hello(version, apiLevel, nombre, maxCanales, capacidadBufferMs);
-    }
-
-    static void validarU8(int valor, String campo) {
-        if (valor < 0 || valor > 0xFF) {
-            throw new IllegalArgumentException(campo + " fuera de rango: " + valor);
-        }
     }
 
     @Override
