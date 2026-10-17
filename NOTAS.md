@@ -158,3 +158,66 @@ Total: **84 tests JVM, 0 fallas** (`./gradlew :core:testDebugUnitTest`). Corren 
 - **Contra el SDK real:** el APK del receptor (71 888 bytes) ya incluye el códec, el decimador y el downmix.
   - `herramientas/verificar_api.py` contra API 10: 91 referencias, **0 faltantes**.
   - Contra API 9 falta solo el socket insecure, que está protegido con `SDK_INT >= 10`.
+
+## Fase 2 — receptor completo + tono de prueba
+
+### Verificación sin dispositivo (contenedor Linux, 2026-10-17)
+
+**Tests JVM:** `./gradlew :core:testDebugUnitTest` → **135 tests, 0 fallas** (~7 s).
+
+| Test | Qué prueba |
+|---|---|
+| `SimulacionTest` | Emisor y receptor completos en un hilo con tiempo virtual (pasos de 1 ms) y un enlace simulado como el medido en la Fase 0: 165 KB/s y 1,5 MB de buffer en el socket del emisor. La salida imita al AudioTrack de 2.3 (no suena hasta llenarse; posición de a 1024 frames). |
+| `ReproductorTest` | Estados del reproductor contra una `SalidaFalsa` con la semántica de 2.3: no escribe sin CONFIG, llenando ni en pausa; umbral de arranque con el buffer de la salida; un corte largo es un solo corte; VACIAR no deja sonar nada viejo; CONFIG mono tras estéreo recrea la salida; escrituras parciales exactas; salida rota → se reabre; `abrir` fallido → reintento cada 1 s; `bufferMs` con la posición dando la vuelta en 2³¹. |
+| `PipelineEmisorTest` | Formato de cada preset (también 96 y 192 kHz, 5.1 y mono); CONFIG + TRACK + seq 0; control de flujo sin STATE (se detiene en 94 bloques = 2005 ms), con STATE, con un STATE de otra conexión y tras VACIAR; DETENER; último bloque rellenado; trozos de largo irregular → bloques idénticos; SNR del tono decodificado ≥ 20 dB en los tres presets. |
+| `PuntaAPuntaTest` | Hilos y sockets TCP reales, como en las apps (red, STATE y audio en el receptor; lector y pipeline en el emisor): 3 s de tono → 440 Hz limpio (SNR ≥ 20 dB), STATE llegando, 0 cortes; AUDIO de largo incorrecto → BYE(2). |
+| `SesionTest` | `SesionEmisor` asíncrona: STATE intercalado con PONG y TEST_RESULT, watchdog de 4 s con reloj virtual, BYE durante la espera, cerrar desbloquea al lector. |
+| `ColaBloquesTest` | Orden, pool agotado, generaciones (un VACIAR durante un paso del hilo de audio no pierde ni deja sonar bloques), 20 000 operaciones al azar sin perder ni duplicar bloques. |
+| `SinAsignacionesTest` | 0 bytes asignados en el ciclo completo del receptor (red → cola → decodificar → escribir → STATE, con PING y VACIAR intercalados) y en el pipeline del emisor (96 kHz estéreo → Segura). |
+
+**Simulación de 10 minutos** (criterio ① en la JVM; la salida tiene 8192 frames):
+
+| Preset | Cortes | Subcortes | Faltas en la salida | Desbordes | Nivel estimado máx. | `bufferMs` sonando | Cola máx. | En tránsito máx. |
+|---|---|---|---|---|---|---|---|---|
+| Alta (48 kHz estéreo) | 0 | 0 | 0 | 0 | 2005 ms | 1408–1941 ms | 82 bloques | 98 KB (la ráfaga inicial) |
+| Segura (24 kHz mono) | 0 | 0 | 0 | 0 | 2005 ms | 1408–2005 ms | 38 bloques | 25 KB |
+
+Además:
+- Enlace detenido 1 s → 0 cortes. Detenido 3 s → exactamente 1 corte, se recupera solo y el nivel no pasa de 2022 ms.
+- VACIAR → no suena nada de antes y no cuenta corte. DETENER → la salida se libera y la conexión sigue viva con los PING; un tono nuevo en la misma conexión sigue la numeración de seq.
+- Emisor mudo → el receptor cierra entre 5000 y 5001 ms después de la última trama; 4,5 s de silencio no lo cierran.
+
+**Cambio en los tests:** ya no corren con `-Xint` sino con `-XX:-DoEscapeAnalysis -XX:-EliminateAllocations` (core/build.gradle.kts). Con el intérprete, la simulación de 10 minutos tardaba demasiado. Sin escape analysis el JIT ya no puede eliminar asignaciones que Dalvik sí haría. Un control nuevo lo comprueba: 10 000 objetos locales que no salen del método se miden con estas opciones y dan 0 bytes con el escape analysis activo.
+
+**Pruebas de mutación** (en una copia aparte del repo): [PENDIENTE]
+
+**Lint, APK y SDK real:**
+- Lint sin problemas en core, receptor y emisor.
+- `./gradlew :receptor:verificarApk`: firma v1 válida para minSdk 9, dex 035, sin Kotlin ni AndroidX.
+- `herramientas/verificar_api.py` contra API 10: 201 referencias externas y 70 tipos del framework, **0 faltantes**. Contra API 9 falta solo el socket insecure, protegido con `SDK_INT >= 10`.
+- Dependencias del receptor (`debugRuntimeClasspath` y `releaseRuntimeClasspath`): solo `project ':core'`.
+
+### Pruebas en los teléfonos — [PENDIENTE]
+
+Versiones: receptor 0.2.0 y emisor 0.2.0 (protocolo v1), release v0.2.0.
+
+| Prueba | Resultado |
+|---|---|
+| ① 10 min de tono con las dos pantallas apagadas (emisor en segundo plano, batería «Optimizada») | [PENDIENTE] cortes, subcortes |
+| ② Apagar y encender el Bluetooth del emisor, app en segundo plano: reconecta solo y el tono vuelve (5 ciclos) | [PENDIENTE] |
+| 2 cambios de preset sin reiniciar el receptor | [PENDIENTE] |
+| Detener desde la notificación mientras reconecta → no reintenta | [PENDIENTE] |
+| «Detener receptor» con el tono sonando → el emisor no reintenta | [PENDIENTE] |
+| Reconexión con la pantalla del Galaxy Y apagada desde hace ≥ 2 min | [PENDIENTE] |
+
+**Mediciones del Galaxy Y** (logcat `adb logcat -s ParlanteY`, línea «minuto: …», y la pantalla del receptor):
+
+| Dato | 44,1 kHz | 48 kHz |
+|---|---|---|
+| `getMinBufferSize` mono / estéreo (B) | [PENDIENTE] | [PENDIENTE] |
+| Tasa nativa de salida | [PENDIENTE] | |
+| Prioridad efectiva del hilo de audio | [PENDIENTE] | |
+| Decodificación por bloque prom./máx. (µs), estéreo | [PENDIENTE] | [PENDIENTE] |
+| CPU del proceso (%), `adb shell top -m 5` | [PENDIENTE] | [PENDIENTE] |
+| GC por minuto | [PENDIENTE] | [PENDIENTE] |
+| ¿Se oye distinto el tono de 48 kHz (remuestreo a 44,1 en AudioFlinger)? | | [PENDIENTE] |
