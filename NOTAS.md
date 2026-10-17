@@ -53,41 +53,54 @@ Aquí van las mediciones y pruebas en dispositivo de cada fase. Lo que dice `[PE
 
 | | Receptor | Emisor |
 |---|---|---|
-| Modelo | Samsung Galaxy Y GT-S5360 `[PENDIENTE: confirmar en Ajustes → Acerca del teléfono]` | `[PENDIENTE]` |
-| Android / API | 2.3.x `[PENDIENTE]` | `[PENDIENTE]` |
-| Versión de la app | 0.0.1 (protocolo v1) | 0.0.1 (protocolo v1) |
+| Modelo | Samsung Galaxy Y **GT-S5360L** (según su nombre Bluetooth en el HELLO) | Samsung **SM-A356E** (Galaxy A35 5G) |
+| Android / API | 2.3.x `[PENDIENTE: confirmar en Ajustes → Acerca del teléfono]` | Android 16 (API 36) |
+| Versión de la app | 0.0.1 (protocolo v1), release v0.0.1 | 0.0.1 (protocolo v1), release v0.0.1 |
 
-### Instalación y conexión `[PENDIENTE]`
+### Instalación y conexión (2026-10-17)
 
-- [ ] Receptor instalado en el Galaxy Y (método: adb / microSD).
-- [ ] Receptor abierto: muestra «Esperando conexión…» y el nombre/MAC del teléfono.
-- [ ] Emisor instalado y con el permiso «Dispositivos cercanos» concedido.
-- [ ] Teléfonos vinculados («Hacer visible» en el receptor → Ajustes → Bluetooth en el emisor).
-- [ ] El emisor conecta y muestra «Receptor «…» · Android API 10 · protocolo v1».
-- [ ] Conexión estable: ≥ 5 min conectados con el RTT en vivo actualizándose, sin cortes.
-- [ ] Desconectar y reconectar sin reabrir la app receptor.
+- [x] Receptor instalado y abierto en el Galaxy Y: aceptó la conexión y respondió las pruebas.
+- [x] Emisor instalado con el permiso «Dispositivos cercanos».
+- [x] Teléfonos vinculados.
+- [x] El emisor conecta y recibe el HELLO del receptor (protocolo v1).
+- [ ] Conexión estable: ≥ 5 min conectados con el RTT en vivo actualizándose, sin cortes. `[PENDIENTE]`
+- [ ] Desconectar y reconectar sin reabrir la app receptor. `[PENDIENTE]`
 
-### Mediciones de enlace `[PENDIENTE]`
+### Mediciones de enlace (2026-10-17)
 
-Condiciones: `[distancia entre teléfonos, misma habitación o no, batería, otros dispositivos BT/Wi-Fi cerca]`.
+Condiciones: `[PENDIENTE: distancia entre teléfonos, misma habitación o no]`.
 
-Hacer al menos 3 pruebas con el Wi-Fi del Galaxy Y **encendido** y 3 con el Wi-Fi **apagado**, marcando el chip correspondiente en el emisor antes de cada prueba. Luego tocar **Copiar** en «Mediciones» y pegar aquí la tabla:
+Tabla copiada desde el emisor:
 
-```
-(pegar aquí)
-```
+Emisor: samsung SM-A356E (Android 16, API 36) · ParlanteY Emisor 0.0.1 · protocolo v1
 
-### Conclusión de la Fase 0 `[PENDIENTE]`
+| Fecha y hora | Receptor | Wi-Fi Galaxy Y | KB/s (receptor) | KB/s (emisor) | RTT mín/prom/máx (ms) | KB en s | Preset Auto |
+|---|---|---|---|---|---|---|---|
+| 2026-10-17 02:37:29 | GT-S5360L | ? | 165.6 | 165.2 | 7/13/58 | 2396.7 en 14.5 | Alta |
+| 2026-10-17 02:38:01 | GT-S5360L | OFF | 165.7 | 165.5 | 7/9/12 | 2396.7 en 14.5 | Alta |
 
-- Throughput según el receptor: Wi-Fi ON ≈ ___ KB/s · Wi-Fi OFF ≈ ___ KB/s.
-- RTT promedio: ___ ms.
+La primera prueba no tiene marcado el estado del Wi-Fi del Galaxy Y. `[PENDIENTE: confirmar si fue con Wi-Fi encendido, o repetir con Wi-Fi ON]`
+
+**Observación: el emisor no se bloquea al escribir.** Cada prueba envía TEST_DATA durante 5 s, pero el receptor tardó 14,5 s en recibirlo todo.
+- En esos 5 s, el SM-A356E (Android 16) aceptó ~2,4 MB en el socket. El enlace solo había entregado ~0,8 MB, así que quedaron **~1,5 MB en buffers del lado emisor** (~9,5 s de enlace).
+- La cifra de throughput sigue siendo válida: el receptor mide la llegada real de los 2,4 MB en 14,5 s.
+- Consecuencia para las fases siguientes: bloquear `write()` no sirve como control de flujo en este emisor. Hay que regular el envío con `STATE.bufferMs` y `ultimoSeq`, como ya prevé CLAUDE.md.
+- En el modo Todo el audio (Fase 4), esos buffers podrían guardar ~30 s de audio Alta. El descarte de lo más antiguo debe hacerse antes de escribir en el socket, y la cola debe acotarse por bytes en vuelo según STATE, no por lo que acepte `write()`.
+
+### Conclusión de la Fase 0
+
+- **Throughput según el receptor: ≈ 165,6 KB/s** (unos 1,3 Mbit/s, típico de RFCOMM sobre Bluetooth EDR).
+  - Wi-Fi OFF: 165,7 KB/s.
+  - Primera prueba (Wi-Fi sin marcar): 165,6 KB/s.
+  - No hubo diferencia apreciable.
+- **RTT promedio: 9–13 ms** (máx. 58 ms).
 - Umbrales con la regla del 70 %, incluyendo el overhead de las tramas AUDIO (ver PROTOCOLO.md §6):
 
-  | Preset | KB/s medidos |
-  |---|---|
-  | Segura | ≥ 17,7 |
-  | Normal | ≥ 35,4 |
-  | Alta | ≥ 69,9 |
+  | Preset | KB/s medidos | Medido ≈ 165,6 |
+  |---|---|---|
+  | Segura | ≥ 17,7 | ✓ |
+  | Normal | ≥ 35,4 | ✓ |
+  | Alta | ≥ 69,9 | ✓ (2,4× el umbral) |
 
-- Preset Auto esperado: ___.
-- Si el peor caso queda bajo 17,7 KB/s: detenerse y proponer adelantar el transporte TCP (Fase 5).
+- **Preset Auto: Alta.** El flujo Alta ocupa ≈ 48,9 KB/s, el 30 % de lo medido.
+- **No hace falta adelantar el transporte TCP (Fase 5):** Segura se supera por casi 10×.
