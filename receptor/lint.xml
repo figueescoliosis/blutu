@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- El receptor solo corre en Android 2.3 (targetSdk 10). -->
+<lint>
+    <!-- BLUETOOTH_CONNECT y BLUETOOTH_ADVERTISE son de API 31: en API 9-10 basta BLUETOOTH,
+         que está en el manifiesto. Se ignoran solo esos avisos; el resto de MissingPermission
+         sigue activo. -->
+    <issue id="MissingPermission">
+        <ignore regexp="BLUETOOTH_CONNECT|BLUETOOTH_ADVERTISE" />
+    </issue>
+    <!-- La MAC se muestra para reconocer este teléfono en la lista del emisor. -->
+    <issue id="HardwareIds" severity="ignore" />
+    <!-- Pantalla fija en vertical (240×320); los avisos son para Chrome OS y Android 16+. -->
+    <issue id="LockedOrientationActivity" severity="ignore" />
+    <issue id="DiscouragedApi">
+        <ignore regexp="screenOrientation|orientations" />
+    </issue>
+</lint>

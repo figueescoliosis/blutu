@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ParlanteY</string>
+    <string name="titulo">ParlanteY · Receptor</string>
+    <string name="version">App %1$s · protocolo v%2$d</string>
+    <string name="este_telefono">Este teléfono: %1$s</string>
+
+    <string name="estado_sin_bt">Este teléfono no tiene Bluetooth</string>
+    <string name="estado_bt_apagado">Bluetooth apagado</string>
+    <string name="estado_esperando">Esperando conexión…</string>
+    <string name="estado_conectado">Conectado a %1$s</string>
+
+    <string name="evento_ninguno">—</string>
+    <string name="evento_emisor_salio">El emisor se desconectó</string>
+    <string name="evento_conexion_perdida">Se perdió la conexión</string>
+    <string name="evento_protocolo">Error de protocolo: %1$s</string>
+    <string name="evento_servidor">Error del servidor Bluetooth: %1$s</string>
+    <string name="evento_version">El emisor usa otra versión del protocolo. Actualiza las dos apps.</string>
+    <string name="evento_visible">Visible durante %1$d s</string>
+    <string name="evento_visible_cancelado">Visibilidad cancelada</string>
+    <string name="evento_bt_rechazado">Sin Bluetooth no se puede recibir</string>
+
+    <string name="prueba_ninguna">Sin pruebas de enlace todavía</string>
+    <string name="prueba_resultado">Última prueba: %1$s KB/s\n(%2$s KB en %3$s s)</string>
+
+    <string name="boton_visible">Hacer visible</string>
+    <string name="ayuda">Para vincular: toca Hacer visible y, en el emisor, Ajustes → Bluetooth → vincular.</string>
+</resources>
