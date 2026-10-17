@@ -58,6 +58,27 @@ public class DownmixTest {
     }
 
     @Test
+    public void respetaLosDesplazamientos() {
+        short[] pcm = Senales.sintetica(100, 2, 11);
+        short[] esperado = new short[100];
+        Downmix.aMono(pcm, 0, 100, 2, esperado, 0);
+
+        short[] entrada = new short[6 + 200];
+        java.util.Arrays.fill(entrada, (short) 9999); // 3 frames de basura delante
+        System.arraycopy(pcm, 0, entrada, 6, 200);
+        short[] salida = new short[5 + 100 + 5];
+        java.util.Arrays.fill(salida, (short) 7777);
+        Downmix.aMono(entrada, 6, 100, 2, salida, 5);
+        for (int i = 0; i < 100; i++) {
+            assertEquals(esperado[i], salida[5 + i]);
+        }
+        for (int i = 0; i < 5; i++) {
+            assertEquals("centinela antes", 7777, salida[i]);
+            assertEquals("centinela después", 7777, salida[105 + i]);
+        }
+    }
+
+    @Test
     public void canalesFueraDeRango() {
         for (int canales : new int[] {0, 9}) {
             try {

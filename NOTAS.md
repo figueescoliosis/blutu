@@ -124,22 +124,36 @@ Verificación sin dispositivo (contenedor Linux, 2026-10-17). Esta fase no cambi
 | ① Ida y vuelta de cada tipo de trama | `TramasTest` (6 tipos de la Fase 0) y `MensajesTest` (CONFIG, AUDIO, TRACK, CONTROL, STATE byte a byte y con valores extremos; los 11 tipos en un mismo flujo) | ✓ |
 | ② Trama corrupta rechazada | magic, largo, truncada, `read()=0`, payload corto de cada tipo y valores inválidos de CONFIG → `ProtocoloException` | ✓ |
 | ③ SNR ≥ 20 dB (seno 1 kHz, −6 dBFS, 44,1 kHz) | `ImaAdpcmTest.snrSeno*` | ✓ **36,2 dB** en mono; **36,2 y 34,3 dB** por canal en estéreo |
-| ④ Bloque aislado = en secuencia | `ImaAdpcmTest.bloqueAisladoIgualQueEnSecuencia`, 12 bloques en mono y en estéreo; cada cabecera coincide con el estado arrastrado | ✓ |
-| ⑤ Salida determinista | Codificar dos veces da bytes idénticos; los CRC32 del codificador, del decodificador, del decimador y del downmix coinciden con una **implementación independiente en Python** (`herramientas/referencia_core.py`) | ✓ |
+| ④ Bloque aislado = en secuencia | `ImaAdpcmTest.bloqueAisladoIgualQueEnSecuencia`: 12 bloques en mono y en estéreo, más onda cuadrada y ruido a escala completa (índice 88 y predictor saturado); cada cabecera coincide con el estado arrastrado y el byte reservado es 0 | ✓ |
+| ⑤ Salida determinista | Codificar dos veces da bytes idénticos. Los CRC32 coinciden con una **implementación independiente en Python** (`herramientas/referencia_core.py`) en el codificador y el decodificador (también a escala completa), en el decimador y en el downmix | ✓ |
 
-Total: **79 tests JVM, 0 fallas** (`./gradlew :core:testDebugUnitTest`).
+Total: **84 tests JVM, 0 fallas** (`./gradlew :core:testDebugUnitTest`). Corren con `-Xint` (ver abajo).
+
+**Pruebas de mutación** (en una copia aparte del repo): se introdujeron 6 errores a propósito y los tests detectaron los 6.
+- cabecera escrita con el estado final;
+- nibbles invertidos en el codificador y el decodificador;
+- fase de salida del decimador cambiada;
+- predictor en little-endian;
+- downmix que trunca en vez de redondear;
+- STATE sin su último byte.
 
 ### Otras mediciones
 - **Decimador ×2** (FIR de media banda de 47 coeficientes, Kaiser β = 7, Q15):
-  - diseño: ≥ 69 dB de atenuación entre 0,3 y 0,5 fs y rizado ≤ 0,003 dB entre 0 y 0,2 fs;
+  - diseño: ≥ 68,9 dB de atenuación entre 0,3 y 0,5 fs (mínimo 68,97 dB cerca de 0,303 fs) y rizado ≤ 0,003 dB entre 0 y 0,2 fs;
   - medido: un tono a 0,1 fs pasa con −0,000 dB y uno a 0,35 fs queda en **−83,4 dB**;
   - ganancia DC exacta; procesar por trozos de cualquier largo da lo mismo que procesar todo junto.
-- **Sin asignaciones de memoria** (`SinAsignacionesTest`, ThreadMXBean, 2000 repeticiones): **0 bytes** en
-  - decodificar y codificar bloques;
-  - decimador + downmix;
-  - escribir AUDIO/STATE;
-  - leer AUDIO.
-- **Rendimiento del decodificador en la JVM** (solo referencia): ~560× tiempo real a 48 kHz estéreo. La medición en el Galaxy Y (Dalvik con JIT, ARMv6) va en la Fase 2.
+- **Sin asignaciones de memoria** (`SinAsignacionesTest`, ThreadMXBean): **0 bytes** en
+  - decodificar y codificar bloques (2000 repeticiones cada uno);
+  - decimador + downmix (200 bloques de 1024 frames);
+  - escribir AUDIO + STATE (2000 de cada uno);
+  - leer AUDIO (1000 tramas).
+
+  Los tests de core corren con `-Xint` (intérprete). El escape analysis del JIT de HotSpot puede eliminar asignaciones que Dalvik sí haría: con JIT, un `new` por canal en el decodificador pasaba el test sin que se notara. Un control positivo comprueba que la medición sí detecta asignaciones.
+- **Rendimiento del decodificador en la JVM** (solo referencia):
+  - ~98× tiempo real a 48 kHz estéreo en el intérprete;
+  - ~560× con JIT.
+
+  La medición en el Galaxy Y (Dalvik con JIT, ARMv6) va en la Fase 2.
 - **Lint:** sin problemas en core, receptor y emisor.
 - **Contra el SDK real:** el APK del receptor (71 888 bytes) ya incluye el códec, el decimador y el downmix.
   - `herramientas/verificar_api.py` contra API 10: 91 referencias, **0 faltantes**.

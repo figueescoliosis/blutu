@@ -40,6 +40,46 @@ def senal(frames, canales, semilla):
     return s
 
 
+def cuadrada(frames, periodo):
+    """Onda cuadrada a escala completa: lleva el índice del códec a 88 y satura el predictor."""
+    return [32767 if (i // periodo) % 2 == 0 else -32768 for i in range(frames)]
+
+
+def ruido_completo(frames, canales, semilla):
+    """Ruido a escala completa de un LCG (también llega al índice 88)."""
+    s = []
+    x = semilla
+    for _ in range(frames * canales):
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        s.append((x >> 15) - 32768)
+    return s
+
+
+def indice_maximo(pcm, canales):
+    """Índice más alto que alcanza el codificador con esta señal."""
+    maximo = 0
+    for c in range(canales):
+        pred, ind = 0, 0
+        for f in range(len(pcm) // canales):
+            x = pcm[f * canales + c]
+            paso = PASOS[ind]
+            diff = x - pred
+            n = 0
+            if diff < 0:
+                n, diff = 8, -diff
+            if diff >= paso:
+                n |= 4
+                diff -= paso
+            if diff >= paso >> 1:
+                n |= 2
+                diff -= paso >> 1
+            if diff >= paso >> 2:
+                n |= 1
+            pred, ind = reconstruir(n, pred, ind)
+            maximo = max(maximo, ind)
+    return maximo
+
+
 def reconstruir(n, pred, ind):
     paso = PASOS[ind]
     dif = paso >> 3
@@ -145,6 +185,14 @@ def main():
     mono = senal(3 * 1024 + 1, 1, 777)
     print(f"IMA mono: CRC32 0x{zlib.crc32(codificar(mono, 1)):08X}")
     print(f"Decimador estéreo: CRC32 0x{crc_pcm(decimar(estereo, 2)):08X}")
+    cuad = cuadrada(4 * 1024, 50)
+    flujo_cuad = codificar(cuad, 1)
+    print(f"IMA onda cuadrada (índice máx. {indice_maximo(cuad, 1)}): CRC32 0x{zlib.crc32(flujo_cuad):08X}, "
+          f"decodificado 0x{crc_pcm(decodificar(flujo_cuad, 1)):08X}")
+    ruido = ruido_completo(3 * 1024, 2, 2024)
+    flujo_ruido = codificar(ruido, 2)
+    print(f"IMA ruido a escala completa (índice máx. {indice_maximo(ruido, 2)}): CRC32 0x{zlib.crc32(flujo_ruido):08X}, "
+          f"decodificado 0x{crc_pcm(decodificar(flujo_ruido, 2)):08X}")
     seis = senal(2000, 6, 99)
     print(f"Downmix 6 canales: CRC32 0x{crc_pcm(a_mono(seis, 6)):08X}")
     print(f"Downmix estéreo: CRC32 0x{crc_pcm(a_mono(estereo, 2)):08X}")

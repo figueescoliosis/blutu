@@ -61,38 +61,43 @@ public class ImaAdpcmTest {
 
     @Test
     public void bloqueAisladoIgualQueEnSecuencia() {
-        for (int canales = 1; canales <= 2; canales++) {
-            int frames = 12 * MPB;
-            short[] x = Senales.sintetica(frames, canales, 4242 + canales);
-            byte[] flujo = codificar(x, frames, canales);
-            int largo = ImaAdpcm.bytesBloque(canales, MPB);
-            int bloques = flujo.length / largo;
+        verificarAisladoIgualQueSecuencia(Senales.sintetica(12 * MPB, 1, 4243), 12 * MPB, 1);
+        verificarAisladoIgualQueSecuencia(Senales.sintetica(12 * MPB, 2, 4244), 12 * MPB, 2);
+        // Señales a escala completa: llevan el índice a 88 y saturan el predictor.
+        verificarAisladoIgualQueSecuencia(Senales.cuadrada(4 * MPB, 50), 4 * MPB, 1);
+        verificarAisladoIgualQueSecuencia(Senales.ruidoCompleto(3 * MPB, 2, 2024), 3 * MPB, 2);
+    }
 
-            // En secuencia: el estado viene del bloque anterior; solo se lee la cabecera del primero.
-            short[] secuencia = new short[bloques * MPB * canales];
-            int[] estado = new int[canales];
+    private static void verificarAisladoIgualQueSecuencia(short[] x, int frames, int canales) {
+        byte[] flujo = codificar(x, frames, canales);
+        int largo = ImaAdpcm.bytesBloque(canales, MPB);
+        int bloques = flujo.length / largo;
+
+        // En secuencia: el estado viene del bloque anterior; solo se lee la cabecera del primero.
+        short[] secuencia = new short[bloques * MPB * canales];
+        int[] estado = new int[canales];
+        for (int c = 0; c < canales; c++) {
+            estado[c] = (predictorCabecera(flujo, 0, c) << 8) | indiceCabecera(flujo, 0, c);
+        }
+        for (int b = 0; b < bloques; b++) {
+            int base = b * largo;
             for (int c = 0; c < canales; c++) {
-                estado[c] = (predictorCabecera(flujo, 0, c) << 8) | indiceCabecera(flujo, 0, c);
+                assertEquals("la cabecera del bloque " + b + " es el estado arrastrado",
+                        ImaAdpcm.predictorDe(estado[c]), predictorCabecera(flujo, base, c));
+                assertEquals(ImaAdpcm.indiceDe(estado[c]), indiceCabecera(flujo, base, c));
+                assertEquals("byte reservado", 0, flujo[base + ImaAdpcm.CABECERA_CANAL * c + 3]);
+                int datos = base + ImaAdpcm.CABECERA_CANAL * canales + c * MPB / 2;
+                estado[c] = ImaAdpcm.decodificarCanal(flujo, datos, MPB, ImaAdpcm.predictorDe(estado[c]),
+                        ImaAdpcm.indiceDe(estado[c]), secuencia, b * MPB * canales + c, canales);
             }
-            for (int b = 0; b < bloques; b++) {
-                int base = b * largo;
-                for (int c = 0; c < canales; c++) {
-                    assertEquals("la cabecera del bloque " + b + " es el estado arrastrado",
-                            ImaAdpcm.predictorDe(estado[c]), predictorCabecera(flujo, base, c));
-                    assertEquals(ImaAdpcm.indiceDe(estado[c]), indiceCabecera(flujo, base, c));
-                    int datos = base + ImaAdpcm.CABECERA_CANAL * canales + c * MPB / 2;
-                    estado[c] = ImaAdpcm.decodificarCanal(flujo, datos, MPB, ImaAdpcm.predictorDe(estado[c]),
-                            ImaAdpcm.indiceDe(estado[c]), secuencia, b * MPB * canales + c, canales);
-                }
-            }
+        }
 
-            // Cada bloque solo, en un arreglo propio.
-            for (int b = 0; b < bloques; b++) {
-                short[] aislado = new short[MPB * canales];
-                ImaAdpcm.decodificarBloque(flujo, b * largo, canales, MPB, aislado, 0);
-                for (int i = 0; i < aislado.length; i++) {
-                    assertEquals("bloque " + b + ", muestra " + i, secuencia[b * MPB * canales + i], aislado[i]);
-                }
+        // Cada bloque solo, en un arreglo propio.
+        for (int b = 0; b < bloques; b++) {
+            short[] aislado = new short[MPB * canales];
+            ImaAdpcm.decodificarBloque(flujo, b * largo, canales, MPB, aislado, 0);
+            for (int i = 0; i < aislado.length; i++) {
+                assertEquals("bloque " + b + ", muestra " + i, secuencia[b * MPB * canales + i], aislado[i]);
             }
         }
     }
@@ -121,6 +126,20 @@ public class ImaAdpcmTest {
 
         short[] mono = Senales.sintetica(3 * MPB + 1, 1, 777);
         assertEquals("CRC del flujo mono", 0x0FFB2FF5L, Senales.crc(codificar(mono, 3 * MPB + 1, 1)));
+    }
+
+    /** Con el índice en 88 y el predictor saturado, codificador y decodificador siguen a la referencia. */
+    @Test
+    public void escalaCompletaFijadaPorLaReferencia() {
+        byte[] cuadrada = codificar(Senales.cuadrada(4 * MPB, 50), 4 * MPB, 1);
+        assertEquals("CRC onda cuadrada", 0x6800C699L, Senales.crc(cuadrada));
+        short[] pcm = decodificarAislado(cuadrada, 1);
+        assertEquals("CRC onda cuadrada decodificada", 0x983BF95EL, Senales.crc(pcm, 0, pcm.length));
+
+        byte[] ruido = codificar(Senales.ruidoCompleto(3 * MPB, 2, 2024), 3 * MPB, 2);
+        assertEquals("CRC ruido a escala completa", 0x088458B6L, Senales.crc(ruido));
+        pcm = decodificarAislado(ruido, 2);
+        assertEquals("CRC ruido decodificado", 0xD51C53EFL, Senales.crc(pcm, 0, pcm.length));
     }
 
     // --- Casos borde y vectores calculados a mano.
@@ -163,9 +182,6 @@ public class ImaAdpcmTest {
             x[i] = (short) ((i / 50) % 2 == 0 ? 32767 : -32768);
         }
         short[] y = decodificarAislado(codificar(x, frames, 1), 1);
-        for (short v : y) {
-            assertTrue(v >= -32768 && v <= 32767);
-        }
         // Tras la primera transición el códec sigue la onda (no se queda pegado).
         assertTrue(y[49] > 20000 && y[99] < -20000);
     }
@@ -176,6 +192,20 @@ public class ImaAdpcmTest {
         for (short v : decodificarAislado(flujo, 2)) {
             assertEquals(0, v);
         }
+    }
+
+    @Test
+    public void codificadorEscribeTodoElBloque() {
+        // Aunque el destino traiga basura, el bloque queda igual (incluido el byte reservado en 0).
+        short[] x = Senales.sintetica(MPB, 2, 6);
+        byte[] limpio = new byte[ImaAdpcm.bytesBloque(2, MPB)];
+        byte[] sucio = new byte[limpio.length];
+        java.util.Arrays.fill(sucio, (byte) 0xFF);
+        new CodificadorIma(2, MPB).codificarBloque(x, 0, MPB, limpio, 0);
+        new CodificadorIma(2, MPB).codificarBloque(x, 0, MPB, sucio, 0);
+        assertArrayEquals(limpio, sucio);
+        assertEquals(0, sucio[3]);
+        assertEquals(0, sucio[ImaAdpcm.CABECERA_CANAL + 3]);
     }
 
     @Test
@@ -229,7 +259,10 @@ public class ImaAdpcmTest {
         assertEquals(1032, new CodificadorIma(2, 1024).bytesBloque());
     }
 
-    /** Referencia de rendimiento en la JVM; la medición real en el Galaxy Y va en la Fase 2. */
+    /**
+     * Referencia de rendimiento. Los tests de core corren con -Xint (intérprete), así que esta
+     * cifra es conservadora; la medición real en el Galaxy Y va en la Fase 2.
+     */
     @Test
     public void rendimientoDeReferencia() {
         short[] x = Senales.sintetica(48 * MPB, 2, 1);
@@ -251,6 +284,6 @@ public class ImaAdpcmTest {
         }
         double segundos = (System.nanoTime() - t) / 1e9;
         double audio = bloques * MPB / 48000.0;
-        System.out.printf("Decodificador (JVM): %.0f× tiempo real a 48 kHz estéreo%n", audio / segundos);
+        System.out.printf("Decodificador (JVM, intérprete): %.0f× tiempo real a 48 kHz estéreo%n", audio / segundos);
     }
 }

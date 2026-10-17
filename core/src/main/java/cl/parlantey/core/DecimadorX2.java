@@ -3,8 +3,8 @@ package cl.parlantey.core;
 /**
  * Decimación ×2 de PCM16 entrelazado: FIR paso bajo de media banda y se descarta 1 de cada 2
  * frames. FIR de 47 coeficientes (Kaiser, β = 7) en punto fijo Q15, diseñado con
- * {@code herramientas/disenar_mediabanda.py}: ≥ 69 dB de atenuación entre 0,3 y 0,5 fs y rizado
- * ≤ 0,003 dB entre 0 y 0,2 fs, con fs = tasa de entrada. Ganancia DC exactamente 1.
+ * {@code herramientas/disenar_mediabanda.py}: ≥ 68,9 dB de atenuación entre 0,3 y 0,5 fs y
+ * rizado ≤ 0,003 dB entre 0 y 0,2 fs, con fs = tasa de entrada. Ganancia DC exactamente 1.
  *
  * <p>Guarda historial entre llamadas, así que se puede procesar por trozos de cualquier largo
  * (también impar). Solo enteros: salida idéntica en cualquier plataforma. No asigna memoria; no

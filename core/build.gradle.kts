@@ -22,6 +22,14 @@ android {
         error += listOf("NewApi", "InlinedApi")
         abortOnError = true
     }
+
+    testOptions {
+        unitTests.all {
+            // Intérprete: sin el escape analysis del JIT, SinAsignacionesTest ve las asignaciones
+            // que Dalvik sí haría.
+            it.jvmArgs("-Xint")
+        }
+    }
 }
 
 dependencies {

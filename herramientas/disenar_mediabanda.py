@@ -4,8 +4,8 @@ Uso: python herramientas/disenar_mediabanda.py   (Python puro, sin numpy)
 
 Ventana de Kaiser sobre la respuesta ideal de media banda (corte en fs/4). Los coeficientes se
 redondean a Q15; el central se ajusta para que la suma sea exactamente 32768 (ganancia DC = 1).
-Con N = 47 y beta = 7 da ≥ 69 dB de atenuación entre 0,3 y 0,5 fs y rizado ≤ 0,003 dB entre
-0 y 0,2 fs (fs = tasa de entrada).
+Con N = 47 y beta = 7 da ≥ 68,9 dB de atenuación entre 0,3 y 0,5 fs (mínimo 68,97 dB cerca de
+0,303 fs) y rizado ≤ 0,003 dB entre 0 y 0,2 fs (fs = tasa de entrada).
 """
 import math
 
@@ -52,7 +52,7 @@ def main():
     lado = [q[n] for n in range(0, m, 2)]
     atenuacion = -max(respuesta_db(q, f / 2000) for f in range(600, 1001))
     rizado = max(abs(respuesta_db(q, f / 2000)) for f in range(0, 401))
-    print(f"// N = {N}, Kaiser beta = {BETA}: atenuación {atenuacion:.1f} dB (0,3–0,5 fs), "
+    print(f"// N = {N}, Kaiser beta = {BETA}: atenuación {atenuacion:.2f} dB (0,3–0,5 fs), "
           f"rizado {rizado:.4f} dB (0–0,2 fs)")
     print(f"static final int[] LADO = {{{', '.join(map(str, lado))}}};")
     print(f"static final int CENTRO = {q[m]};")

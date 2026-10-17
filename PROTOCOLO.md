@@ -212,7 +212,18 @@ indice    = limitar(indice + AJUSTE[n], 0, 88)
 muestra   = predictor
 ```
 
-**Cuantización del codificador** (IMA de referencia): `diff = x − predictor`. Si `diff < 0`, se pone el bit 8 y se usa `−diff`. Luego se ponen los bits 4, 2 y 1 si `diff` supera `paso`, `paso/2` y `paso/4`, restando cada vez.
+**Cuantización del codificador** (IMA de referencia; las comparaciones son `≥`):
+
+```
+paso = PASOS[indice]
+diff = x − predictor
+n = 0
+si diff < 0:          n = 8;  diff = −diff
+si diff ≥ paso:       n |= 4; diff −= paso
+si diff ≥ paso >> 1:  n |= 2; diff −= paso >> 1
+si diff ≥ paso >> 2:  n |= 1
+(luego predictor e índice se actualizan con la decodificación de n, como arriba)
+```
 
 **Tamaño de una trama AUDIO:** 8 (cabecera) + 4 (seq) + canales × (4 + 512) bytes.
 - Mono: 528 bytes por 1024 muestras.

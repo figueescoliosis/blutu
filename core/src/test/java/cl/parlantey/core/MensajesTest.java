@@ -186,6 +186,13 @@ public class MensajesTest {
     }
 
     @Test
+    public void reproduciendoDistintoDeCeroCuentaComoUno() throws IOException {
+        LectorTramas l = lector(trama(Protocolo.STATE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2));
+        assertEquals(Protocolo.STATE, l.leer());
+        assertTrue(Estado.leer(l.datos()).reproduciendo);
+    }
+
+    @Test
     public void todosLosTiposEnUnMismoFlujo() throws IOException {
         escritor.hello(new Hello(Protocolo.VERSION, 10, "GT-S5360L", 2, 4000));
         escritor.config(Config.imaAdpcm(44100, 1, 500));

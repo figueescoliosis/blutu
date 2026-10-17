@@ -33,6 +33,26 @@ final class Senales {
         return s;
     }
 
+    /** Onda cuadrada a escala completa, igual que en referencia_core.py: lleva el índice a 88. */
+    static short[] cuadrada(int frames, int periodo) {
+        short[] s = new short[frames];
+        for (int i = 0; i < frames; i++) {
+            s[i] = (short) ((i / periodo) % 2 == 0 ? 32767 : -32768);
+        }
+        return s;
+    }
+
+    /** Ruido a escala completa de un LCG, igual que en referencia_core.py. */
+    static short[] ruidoCompleto(int frames, int canales, long semilla) {
+        short[] s = new short[frames * canales];
+        long x = semilla;
+        for (int i = 0; i < s.length; i++) {
+            x = (x * 1103515245L + 12345) & 0x7FFFFFFFL;
+            s[i] = (short) ((x >> 15) - 32768);
+        }
+        return s;
+    }
+
     /** Seno de {@code frecuencia} Hz con amplitud relativa a escala completa (1.0 = 32767). */
     static short[] seno(int frames, int canales, int tasa, double frecuencia, double amplitud) {
         short[] s = new short[frames * canales];
