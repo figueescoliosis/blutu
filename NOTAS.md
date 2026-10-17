@@ -53,8 +53,8 @@ Aquí van las mediciones y pruebas en dispositivo de cada fase. Lo que dice `[PE
 
 | | Receptor | Emisor |
 |---|---|---|
-| Modelo | Samsung Galaxy Y **GT-S5360L** (según su nombre Bluetooth en el HELLO) | Samsung **SM-A356E** (Galaxy A35 5G) |
-| Android / API | 2.3.x `[PENDIENTE: confirmar en Ajustes → Acerca del teléfono]` | Android 16 (API 36) |
+| Modelo | Samsung Galaxy Y **GT-S5360L** (variante latinoamericana; confirmado en Acerca del teléfono) | Samsung **SM-A356E** (Galaxy A35 5G) |
+| Android / API | **2.3.6 (API 10)** · banda base S5360LUHMC2 · compilación GINGERBREAD.UHMC1 · kernel 2.6.35.7 (mar 2013) | Android 16 (API 36) |
 | Versión de la app | 0.0.1 (protocolo v1), release v0.0.1 | 0.0.1 (protocolo v1), release v0.0.1 |
 
 ### Instalación y conexión (2026-10-17)
@@ -63,12 +63,12 @@ Aquí van las mediciones y pruebas en dispositivo de cada fase. Lo que dice `[PE
 - [x] Emisor instalado con el permiso «Dispositivos cercanos».
 - [x] Teléfonos vinculados.
 - [x] El emisor conecta y recibe el HELLO del receptor (protocolo v1).
-- [ ] Conexión estable: ≥ 5 min conectados con el RTT en vivo actualizándose, sin cortes. `[PENDIENTE]`
-- [ ] Desconectar y reconectar sin reabrir la app receptor. `[PENDIENTE]`
+- [x] Conexión estable: 5 min conectados sin cortes.
+- [x] Desconectar y reconectar sin reabrir la app receptor.
 
 ### Mediciones de enlace (2026-10-17)
 
-Condiciones: `[PENDIENTE: distancia entre teléfonos, misma habitación o no]`.
+Condiciones: no registradas (misma sesión, teléfonos cerca).
 
 Tabla copiada desde el emisor:
 
@@ -79,7 +79,7 @@ Emisor: samsung SM-A356E (Android 16, API 36) · ParlanteY Emisor 0.0.1 · proto
 | 2026-10-17 02:37:29 | GT-S5360L | ? | 165.6 | 165.2 | 7/13/58 | 2396.7 en 14.5 | Alta |
 | 2026-10-17 02:38:01 | GT-S5360L | OFF | 165.7 | 165.5 | 7/9/12 | 2396.7 en 14.5 | Alta |
 
-La primera prueba no tiene marcado el estado del Wi-Fi del Galaxy Y. `[PENDIENTE: confirmar si fue con Wi-Fi encendido, o repetir con Wi-Fi ON]`
+La primera prueba (marcada «?») se hizo con el **Wi-Fi del Galaxy Y encendido**: lo confirmó el usuario; el chip quedó sin marcar en la app.
 
 **Observación: el emisor no se bloquea al escribir.** Cada prueba envía TEST_DATA durante 5 s, pero el receptor tardó 14,5 s en recibirlo todo.
 - En esos 5 s, el SM-A356E (Android 16) aceptó ~2,4 MB en el socket. El enlace solo había entregado ~0,8 MB, así que quedaron **~1,5 MB en buffers del lado emisor** (~9,5 s de enlace).
@@ -87,11 +87,19 @@ La primera prueba no tiene marcado el estado del Wi-Fi del Galaxy Y. `[PENDIENTE
 - Consecuencia para las fases siguientes: bloquear `write()` no sirve como control de flujo en este emisor. Hay que regular el envío con `STATE.bufferMs` y `ultimoSeq`, como ya prevé CLAUDE.md.
 - En el modo Todo el audio (Fase 4), esos buffers podrían guardar ~30 s de audio Alta. El descarte de lo más antiguo debe hacerse antes de escribir en el socket, y la cola debe acotarse por bytes en vuelo según STATE, no por lo que acepte `write()`.
 
-### Conclusión de la Fase 0
+### Conclusión de la Fase 0 — ✅ cerrada el 2026-10-17
+
+| Criterio | Resultado |
+|---|---|
+| APK instalado y abierto | ✓ receptor en el Galaxy Y (2.3.6) y emisor en el SM-A356E |
+| Conexión estable | ✓ 5 min sin cortes; reconecta sin tocar el receptor |
+| KB/s anotados (Wi-Fi ON y OFF) | ✓ 165,6 / 165,7 KB/s |
+| ¿Alcanza para Segura (≥ 17,7 KB/s)? | ✓ por casi 10×: no hace falta adelantar TCP |
+
 
 - **Throughput según el receptor: ≈ 165,6 KB/s** (unos 1,3 Mbit/s, típico de RFCOMM sobre Bluetooth EDR).
-  - Wi-Fi OFF: 165,7 KB/s.
-  - Primera prueba (Wi-Fi sin marcar): 165,6 KB/s.
+  - Wi-Fi del Galaxy Y encendido: 165,6 KB/s.
+  - Wi-Fi apagado: 165,7 KB/s.
   - No hubo diferencia apreciable.
 - **RTT promedio: 9–13 ms** (máx. 58 ms).
 - Umbrales con la regla del 70 %, incluyendo el overhead de las tramas AUDIO (ver PROTOCOLO.md §6):

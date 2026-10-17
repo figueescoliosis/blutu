@@ -6,7 +6,7 @@ Un Android moderno (**emisor**) envía música por Bluetooth a un Samsung Galaxy
 ## Decisiones de diseño (no reabrir sin avisar)
 - Android 2.3 solo implementa A2DP como fuente: puede emitir audio a un parlante, no recibirlo. No existe el rol A2DP sink. → Protocolo propio sobre **RFCOMM** (socket Bluetooth clásico, API 5+).
 - El Galaxy Y no tiene MediaCodec (API 16) y su CPU es ARMv6 sin NEON. → El emisor hace todo el trabajo pesado y envía **IMA ADPCM** (4 bits por muestra). El receptor solo decodifica ADPCM en Java (sumas y tablas) y reproduce con `AudioTrack`.
-- Dispositivo: Samsung Galaxy Y GT-S5360, Android 2.3.x, Bluetooth 3.0, pantalla 240×320, parlante mono, jack 3,5 mm. `[EDITAR: confirmar modelo y versión en Ajustes → Acerca del teléfono]`
+- Dispositivo: Samsung Galaxy Y GT-S5360L (variante latinoamericana), Android 2.3.6 (API 10, compilación GINGERBREAD.UHMC1), Bluetooth 3.0, pantalla 240×320, parlante mono, jack 3,5 mm. Confirmado en Ajustes → Acerca del teléfono (2026-10-17).
 - Entorno de desarrollo: Windows. El receptor se prueba en el teléfono real, sin emulador.
 
 ## Flujo de trabajo
