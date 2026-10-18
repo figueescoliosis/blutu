@@ -62,6 +62,8 @@ public final class FlujoEmisor {
     private Track trackActual;
     private Config configActual;
     private long framesActual;
+    /** seq del primer AUDIO de la pista actual ({@link Protocolo#SEQ_NINGUNO} si todavía no sale). */
+    private long seqInicioActual = Protocolo.SEQ_NINGUNO;
     private CodificadorPista siguiente;
     private Track trackSiguiente;
     private long cambiosDePista;
@@ -123,6 +125,7 @@ public final class FlujoEmisor {
         configEnviado = null;
         seqEnviado = escritor.ultimoSeqAudio();
         seqCorte = Seq.siguiente(seqEnviado);
+        seqInicioActual = Protocolo.SEQ_NINGUNO;
         vaciarPendiente = false;
         controlPendiente = pausado ? Protocolo.CONTROL_PAUSA : 0; // la pausa es por conexión
         nivelPublicadoMs = 0;
@@ -288,6 +291,9 @@ public final class FlujoEmisor {
         }
         long seq = Seq.siguiente(seqEnviado);
         escritor.audio(seq, bloque, 0, actual.bytesBloque());
+        if (seqInicioActual == Protocolo.SEQ_NINGUNO) {
+            seqInicioActual = seq;
+        }
         seqEnviado = seq;
         bloquesEnviados++;
         framesActual += n;
@@ -300,6 +306,7 @@ public final class FlujoEmisor {
         trackActual = track;
         configActual = pista.config(objetivoMs);
         framesActual = 0;
+        seqInicioActual = Protocolo.SEQ_NINGUNO;
         numeroActual++;
     }
 
@@ -488,6 +495,14 @@ public final class FlujoEmisor {
 
     public long bloquesEnviados() {
         return bloquesEnviados;
+    }
+
+    /**
+     * seq del primer AUDIO de la pista actual en esta conexión ({@link Protocolo#SEQ_NINGUNO} si
+     * todavía no sale): un STATE con {@code ultimoSeq} desde ahí y sonando confirma que suena.
+     */
+    public long seqInicioActual() {
+        return seqInicioActual;
     }
 
     /** seq del último AUDIO de esta conexión ({@link Protocolo#SEQ_NINGUNO} si ninguno). */

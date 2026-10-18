@@ -85,7 +85,7 @@ public final class ControlCola {
             // Lo que estaba en el buffer del receptor se perdió: retomar desde lo que se escuchó.
             int i = retomarIndice;
             retomarIndice = -1;
-            reproducir(i, retomarDesdeMs);
+            abrir(i, retomarDesdeMs); // si estaba en pausa, sigue en pausa
         }
     }
 
@@ -102,9 +102,16 @@ public final class ControlCola {
 
     // --- Cola y comandos.
 
-    /** Fija la cola (no empieza a sonar). */
+    /**
+     * Fija la cola (no empieza a sonar). Si es la misma con pistas agregadas al final, lo que suena
+     * sigue y, si era la última, prepara la nueva que sigue.
+     */
     public void cola(Fabrica fabrica) {
         this.fabrica = fabrica;
+        if (indiceActual >= 0 && pendiente == null && preparando == null && aperturaSiguiente == null
+                && !flujo.detenido()) {
+            prepararSiguiente(indiceActual + 1);
+        }
     }
 
     public void preset(Preset preset) {
@@ -115,10 +122,20 @@ public final class ControlCola {
         return preset;
     }
 
-    /** Reproduce la pista {@code indice} desde {@code desdeMs}, cortando lo que suene (VACIAR). */
+    /**
+     * Reproduce la pista {@code indice} desde {@code desdeMs}, cortando lo que suene (VACIAR). Si
+     * estaba en pausa, reanuda: elegir una pista es querer escucharla.
+     */
     public void reproducir(int indice, long desdeMs) {
+        if (abrir(indice, desdeMs) && flujo.pausado()) {
+            flujo.reanudar();
+        }
+    }
+
+    /** Como {@link #reproducir}, sin tocar la pausa. */
+    private boolean abrir(int indice, long desdeMs) {
         if (fabrica == null || indice < 0 || indice >= fabrica.cantidad()) {
-            return;
+            return false;
         }
         cerrar(pendiente);
         pendiente = fabrica.abrir(indice, desdeMs);
@@ -126,9 +143,7 @@ public final class ControlCola {
         desdeMsPendiente = desdeMs;
         finalizada = false;
         retomarIndice = -1; // lo que se elige gana a lo que se iba a retomar
-        if (flujo.pausado()) {
-            flujo.reanudar(); // elegir una pista es querer escucharla
-        }
+        return true;
     }
 
     public void siguiente() {
@@ -180,7 +195,7 @@ public final class ControlCola {
         preset = nuevo;
         int i = indiceSonando();
         if (i >= 0 && !flujo.detenido() && !finalizada) {
-            reproducir(i, ultimaPosicionMs);
+            abrir(i, ultimaPosicionMs);
         }
     }
 
@@ -201,6 +216,7 @@ public final class ControlCola {
             cerrar(aperturaActual);
             indiceActual = indiceSiguiente;
             anotarNumero(indiceActual, 0);
+            finalizada = false; // p. ej. una pista agregada después del final
             aperturaActual = aperturaSiguiente;
             aperturaSiguiente = null;
             indiceSiguiente = -1;
@@ -224,7 +240,7 @@ public final class ControlCola {
         if (pista == null) {
             // No se pudo: la siguiente que se pueda abrir.
             if (i + 1 < fabrica.cantidad()) {
-                reproducir(i + 1, 0);
+                abrir(i + 1, 0);
             } else {
                 detener();
             }

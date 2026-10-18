@@ -536,6 +536,8 @@ public class SimulacionTest {
     private static final class FabricaSintetica implements ControlCola.Fabrica {
         final PistaSintetica[] pistas;
         final long[] ahora;
+        /** Pistas que la cola muestra (para agregar después). */
+        int visibles;
         int abiertas;
         int cerradas;
         final List<Long> desdes = new ArrayList<Long>();
@@ -543,11 +545,12 @@ public class SimulacionTest {
         FabricaSintetica(long[] ahora, PistaSintetica... pistas) {
             this.ahora = ahora;
             this.pistas = pistas;
+            this.visibles = pistas.length;
         }
 
         @Override
         public int cantidad() {
-            return pistas.length;
+            return visibles;
         }
 
         @Override
@@ -881,5 +884,50 @@ public class SimulacionTest {
         assertTrue(c.control.flujo().detenido());
         assertEquals(Reproductor.SIN_CONFIG, c.s.reproductor.estado());
         c.sinCortesNiErrores();
+    }
+
+    /** Una reconexión en pausa sigue en pausa; al reanudar suena desde donde iba. */
+    @Test
+    public void reconectarEnPausaSigueEnPausa() throws IOException {
+        Cola c = new Cola(Preset.ALTA, new PistaSintetica(44100, 2, 12));
+        c.control.reproducir(0, 0);
+        c.s.correr(5000);
+        c.control.pausar();
+        c.s.correr(1000);
+        long sonados = c.s.salida.framesSonados;
+        c.s.reconectar();
+        c.s.correr(3000);
+        assertTrue(c.control.pausado());
+        assertEquals("tras reconectar en pausa no suena nada", sonados, c.s.salida.framesSonados);
+        c.control.reanudar();
+        c.hastaFinalizar(20000);
+        long a = c.sonados(0);
+        long frames = c.fabrica.pistas[0].frames;
+        assertTrue("sonaron " + a + " de " + frames, a >= frames - 64 && a <= frames + 44100 / 2);
+        c.sinCortesNiErrores();
+    }
+
+    /** Pistas agregadas al final, mientras suena la última o cuando ya terminó, siguen sonando. */
+    @Test
+    public void agregarPistasAlFinalDeLaCola() throws IOException {
+        Cola c = new Cola(Preset.ALTA, new PistaSintetica(44100, 2, 3), new PistaSintetica(44100, 2, 2),
+                new PistaSintetica(44100, 2, 2));
+        c.fabrica.visibles = 1;
+        c.control.cola(c.fabrica);
+        c.control.reproducir(0, 0);
+        c.s.correr(1000);
+        c.fabrica.visibles = 2;
+        c.control.cola(c.fabrica);
+        c.hastaFinalizar(20000);
+        sonoEntera(c, 0);
+        sonoEntera(c, 1);
+        c.fabrica.visibles = 3;
+        c.control.cola(c.fabrica);
+        c.s.correr(500);
+        assertFalse(c.control.finalizada());
+        c.hastaFinalizar(20000);
+        sonoEntera(c, 2);
+        assertEquals(java.util.Arrays.asList("Pista 1", "Pista 2", "Pista 3"), c.s.tracks);
+        assertEquals(0, c.s.reproductor.cortes());
     }
 }
