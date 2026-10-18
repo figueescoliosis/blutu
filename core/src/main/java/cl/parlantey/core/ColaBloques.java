@@ -34,6 +34,8 @@ public final class ColaBloques {
     private Config config;
     private long ultimoSeq = Protocolo.SEQ_NINGUNO;
     private int desbordes;
+    /** Cuenta cada aviso (bloque, generación, despertar): para no perder uno entre paso y espera. */
+    private long eventos;
 
     /**
      * @param bloques           tamaño del pool (p. ej. 188: 4000 ms a 48 kHz con bloques de 1024)
@@ -76,12 +78,17 @@ public final class ColaBloques {
         ultimoSeq = seq;
         cola[(inicio + cantidad) % cola.length] = b;
         cantidad++;
-        notifyAll();
+        avisar();
     }
 
     /** Registra un AUDIO recibido que no se encola (sin CONFIG o pool agotado). */
     public synchronized void recibido(long seq) {
         ultimoSeq = seq;
+    }
+
+    /** Conexión nueva: todavía no llegó ningún AUDIO ({@link Protocolo#SEQ_NINGUNO}). */
+    public synchronized void reiniciarSeq() {
+        ultimoSeq = Protocolo.SEQ_NINGUNO;
     }
 
     /**
@@ -98,13 +105,13 @@ public final class ColaBloques {
         inicio = 0;
         generacion++;
         config = nuevo;
-        notifyAll();
+        avisar();
     }
 
     /** Cambia el CONFIG vigente sin vaciar (mismo formato, otro bufferObjetivoMs). */
     public synchronized void actualizarConfig(Config nuevo) {
         config = nuevo;
-        notifyAll();
+        avisar();
     }
 
     // --- Hilo de audio.
@@ -126,23 +133,51 @@ public final class ColaBloques {
 
     public synchronized void devolver(Bloque b) {
         libres[cantidadLibres++] = b;
-        notifyAll();
+    }
+
+    /**
+     * Valor actual del contador de avisos. El hilo de audio lo lee antes de su paso y luego espera
+     * con {@link #esperarTras}: así no pierde un aviso que llegue entre el paso y la espera.
+     */
+    public synchronized long eventos() {
+        return eventos;
     }
 
     /** Espera hasta {@code ms} milisegundos o hasta que llegue un bloque o una generación nueva. */
     public synchronized void esperar(long ms) {
+        esperarTras(eventos, ms);
+    }
+
+    /**
+     * Espera hasta {@code ms} milisegundos, salvo que haya habido avisos desde {@code visto} (de
+     * {@link #eventos()}): entonces vuelve enseguida.
+     */
+    public synchronized void esperarTras(long visto, long ms) {
         if (ms <= 0) {
             return;
         }
-        try {
-            wait(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        long limite = System.nanoTime() + ms * 1000000L;
+        while (eventos == visto) {
+            long resto = (limite - System.nanoTime()) / 1000000L;
+            if (resto <= 0) {
+                return;
+            }
+            try {
+                wait(resto);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 
     /** Despierta a quien esté en {@link #esperar} (p. ej. tras PAUSA o REANUDAR). */
     public synchronized void despertar() {
+        avisar();
+    }
+
+    private void avisar() {
+        eventos++;
         notifyAll();
     }
 

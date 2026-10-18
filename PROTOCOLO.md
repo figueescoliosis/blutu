@@ -73,6 +73,7 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
    - El receptor cierra la conexión si pasan **5 s sin ninguna trama** del emisor.
    - El emisor cierra la conexión si pasan **4 s sin ninguna trama** del receptor, y reintenta (Fase 2: backoff 1, 2, 4, 8, 10… s, hasta 5 min).
 8. **Fin de la conexión** (BYE, EOF, error o watchdog): el receptor actúa como si hubiera recibido DETENER (detiene y libera `AudioTrack`) y vuelve a `accept()`. Al reconectar, el emisor vuelve a enviar CONFIG y TRACK; el audio sigue con seq 0.
+9. **Nada pasa de una conexión a la siguiente:** en la conexión nueva el receptor empieza sin pausa, con `ultimoSeq` = `0xFFFFFFFF` y con `cortes` = 0, ya desde el primer STATE.
 
 ## 5. Tipos
 
@@ -141,7 +142,7 @@ Título UTF, artista UTF y duraciónMs u32 (0 = en vivo). Solo informa a la UI d
 | 1 PAUSA | Pausa `AudioTrack` y conserva la cola. |
 | 2 REANUDAR | Reanuda. |
 | 3 VACIAR | Descarta la cola y lo pendiente en `AudioTrack` (`pause()` + `flush()`: en 2.3, `flush()` con la pista sonando no hace nada), conserva el CONFIG y vuelve a llenar hasta el umbral de arranque antes de sonar. **Conserva la pausa**: si estaba en PAUSA, sigue en pausa. |
-| 4 DETENER | Lo mismo que VACIAR, más `stop()` y liberar `AudioTrack`. Olvida el CONFIG: el siguiente audio necesita un CONFIG nuevo. |
+| 4 DETENER | Lo mismo que VACIAR, más `stop()` y liberar `AudioTrack`. Olvida el CONFIG: el siguiente audio necesita un CONFIG nuevo. **Quita la pausa**: el audio siguiente empieza sonando. |
 
 - Un comando desconocido se ignora, para que versiones futuras puedan agregar comandos.
 - CONFIG, VACIAR y DETENER se aplican **en el orden en que llegan** respecto de los AUDIO: nunca suena audio recibido antes de un VACIAR, aunque el hilo de audio se atrase.
@@ -155,7 +156,7 @@ Payload de 13 bytes:
 |---|---|---|
 | bufferMs | u32 | bloques en cola × ms por bloque + (frames escritos − `getPlaybackHeadPosition()`) en ms. Cuenta solo audio real: el silencio de relleno no. Acotado a 0…capacidadBufferMs. |
 | cortes | u32 | veces que la cola se vació mientras sonaba, desde que se conectó. Un corte largo cuenta una vez. Arrancar, VACIAR, DETENER, un CONFIG nuevo y REANUDAR no cuentan. |
-| ultimoSeq | u32 | seq del último AUDIO **recibido**. Antes del primero vale `0xFFFFFFFF` (`Protocolo.SEQ_NINGUNO`, equivale a −1). |
+| ultimoSeq | u32 | seq del último AUDIO **recibido** en esta conexión. Antes del primero vale `0xFFFFFFFF` (`Protocolo.SEQ_NINGUNO`, equivale a −1). |
 | reproduciendo | u8 | 1 si `AudioTrack` está sonando audio real; 0 si no (sin CONFIG, llenando, en pausa o rellenando tras un corte). Al recibir, cualquier valor ≠ 0 cuenta como 1. |
 
 **Corte en el receptor:** si sonando la cola se vacía y en `AudioTrack` queda ≤ 1 bloque de audio real, el receptor cuenta un corte y escribe silencio de a un bloque (la pista sigue sonando, sin underrun de AudioFlinger) hasta volver al umbral de arranque; entonces retoma el audio sin esperar a que suene el silencio pendiente.
@@ -164,7 +165,7 @@ Payload de 13 bytes:
 - `nivel = STATE.bufferMs + Seq.distancia(seqEnviado, STATE.ultimoSeq) × ms por bloque`, donde `seqEnviado` es el seq del último AUDIO enviado. `Seq.distancia` hace la resta en u32, así que vale aunque el contador haya dado la vuelta.
 - Se envía mientras el nivel sea menor que el objetivo (`bufferObjetivoMs` del CONFIG). El nivel nunca pasa del objetivo + 1 bloque.
 - **Corte del flujo:** al empezar un audio en la conexión (seq siguiente = `seqCorte`) y tras cada VACIAR, los STATE con `ultimoSeq` anterior a `seqCorte` describen un buffer que ya no existe. Se ignoran hasta que llegue uno con `Seq.distancia(ultimoSeq, seqCorte) ≥ 0`; mientras tanto, nivel = todo lo enviado desde el corte.
-- Un STATE con `Seq.distancia(seqEnviado, ultimoSeq) < 0` (un seq que no se envió) o con más bloques en vuelo que la capacidad del receptor también se ignora.
+- Un STATE con `Seq.distancia(seqEnviado, ultimoSeq) < 0` (un seq que no se envió) también se ignora.
 - **No sirve basarse en que `write()` bloquee.** En la Fase 0 el emisor (Android 16) aceptó ~1,5 MB en el socket sin bloquear (NOTAS.md).
 
 ### 0x07 PING / 0x08 PONG
@@ -260,3 +261,4 @@ Con la regla del 70 %, la prueba de enlace debe medir al menos:
 | 1 | 2026-10-17 | Versión inicial. En la Fase 0 se implementan HELLO, PING/PONG, TEST_DATA/TEST_RESULT y BYE. |
 | 1 | 2026-10-17 | Precisiones de la Fase 1, sin cambios de formato: semántica de CONFIG, AUDIO, TRACK, CONTROL y STATE; `ultimoSeq` y control de flujo; el bloque ADPCM al detalle (predictor big-endian, cabecera = estado antes de la primera muestra, relleno del último bloque). Se implementan en `core` todas las tramas. |
 | 1 | 2026-10-17 | Precisiones de la Fase 2, sin cambios de formato: STATE cada 250 ms desde el HELLO; PING cada 1 s siempre; watchdogs de 5 s (receptor) y 4 s (emisor); fin de conexión = DETENER; seq por conexión; `ultimoSeq` cuenta los AUDIO descartados; VACIAR = `pause()` + `flush()` y conserva la pausa; umbral de arranque; `bufferMs` sin el silencio de relleno; definición de corte; control de flujo con `seqCorte`. |
+| 1 | 2026-10-18 | Tras la revisión de la Fase 2, sin cambios de formato: pausa, `ultimoSeq` y `cortes` son por conexión (también en el primer STATE); DETENER quita la pausa; se quita la regla de "más bloques en vuelo que la capacidad", que nunca cambiaba el resultado. |

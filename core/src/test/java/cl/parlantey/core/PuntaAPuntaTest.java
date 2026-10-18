@@ -153,7 +153,7 @@ public class PuntaAPuntaTest {
 
         PipelineEmisor pipeline = new PipelineEmisor(new FuenteTono(48000, 2), Preset.ALTA,
                 new Track("Tono de prueba", "440 Hz", 0), PipelineEmisor.OBJETIVO_ARCHIVOS_MS);
-        pipeline.conectar(sesion.escritor(), sesion::estado, hello.capacidadBufferMs);
+        pipeline.conectar(sesion.escritor(), sesion::estado);
         sesion.setAudioActivo(true);
         emitir(sesion, pipeline, 3 * SEGUNDO);
 

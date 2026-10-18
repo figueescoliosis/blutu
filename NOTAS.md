@@ -187,9 +187,33 @@ Además:
 - VACIAR → no suena nada de antes y no cuenta corte. DETENER → la salida se libera y la conexión sigue viva con los PING; un tono nuevo en la misma conexión sigue la numeración de seq.
 - Emisor mudo → el receptor cierra entre 5000 y 5001 ms después de la última trama; 4,5 s de silencio no lo cierran.
 
-**Cambio en los tests:** ya no corren con `-Xint` sino con `-XX:-DoEscapeAnalysis -XX:-EliminateAllocations` (core/build.gradle.kts). Con el intérprete, la simulación de 10 minutos tardaba demasiado. Sin escape analysis el JIT ya no puede eliminar asignaciones que Dalvik sí haría. Un control nuevo lo comprueba: 10 000 objetos locales que no salen del método se miden con estas opciones y dan 0 bytes con el escape analysis activo.
+**Cambio en los tests:** ya no corren con `-Xint` sino con `-XX:-DoEscapeAnalysis -XX:-EliminateAllocations` (core/build.gradle.kts). Con el intérprete, la simulación de 10 minutos tardaba demasiado. Sin escape analysis el JIT ya no puede eliminar asignaciones que Dalvik sí haría. Un control nuevo lo comprueba: mide 10 000 objetos locales que no salen del método. Con estas opciones los ve; con el escape analysis activo mide 0 bytes y el control falla (se probó).
 
-**Pruebas de mutación** (en una copia aparte del repo): [PENDIENTE]
+**Pruebas de mutación** (en una copia aparte del repo; cada error se introduce solo y se corre toda la suite):
+- Primera ronda, sobre el código inicial: 12 errores (corte por cada bloque de silencio, VACIAR que no suelta el bloque en curso, escribir más de lo que cabe, STATE previo al corte, seq que vuelve a 0 en la conexión, AUDIO sin CONFIG que no actualiza `ultimoSeq`, watchdog de 50 s, silencio contado en `bufferMs`, una asignación en el decodificador, pausa que no detiene las escrituras, `sacar` que ignora la generación, STATE que no se cuentan). Se detectaron 11; el que faltaba (`ultimoSeq` sin CONFIG) llevó a `SesionReceptorTest`. La ronda también destapó un test inestable que era un defecto real: `esperarEstado` perdía un STATE llegado justo antes de la llamada (ahora `esperarEstadoTras`).
+- Segunda ronda, sobre los arreglos de la revisión: [PENDIENTE]
+
+**Revisión adversarial** (tres revisores independientes: core, receptor en 2.3, emisor en Android 14–16). Ninguno encontró algo que haga caer las apps; el criterio ② se siguió paso a paso y funciona. Se corrigieron, con tests:
+- Receptor y core:
+  - la pausa, `ultimoSeq` y los cortes pasaban de una conexión a la siguiente (el primer STATE de una reconexión podía traer el `ultimoSeq` anterior y provocar una segunda ráfaga: 3242 ms en vez de 2000);
+  - salida que queda muda si AudioTrack se traba o se recrea por dentro (mediaserver reiniciado): ahora se detecta en 1,5 s y se reabre;
+  - un CONFIG mono de 2050 muestras rompía el hilo de audio y perdía bloques del pool;
+  - silencio contado como audio tras corte → pausa → reanudar;
+  - un aviso perdido entre el paso del reproductor y su espera (contador de eventos en la cola);
+  - `bufferMs` en 0 mientras la salida no se puede abrir;
+  - el BYE(0) de «Detener receptor» podía perderse (ahora se envía antes de cerrar y se espera hasta 1 s);
+  - el mensaje de la pantalla del receptor tapaba los errores del servicio, incluido el de versión.
+- Emisor:
+  - un segundo tono en la misma conexión heredaba los cortes del primero;
+  - un BYE del receptor podía clasificarse como «se perdió la conexión» (5 min de reintentos);
+  - Detener podía esperar una prueba de enlace entera;
+  - wake lock tomado con el Bluetooth apagado;
+  - sin aviso al rendirse con la pantalla apagada (ahora deja una notificación);
+  - el vigía disparaba durante la espera entre reintentos.
+
+**Pendiente para las fases siguientes** (no ocurre con el tono de la Fase 2):
+- Fase 3: un pipeline nuevo sin VACIAR ni DETENER (pistas sin pausa entre ellas) ignora lo que el receptor ya tiene, y el fin de una fuente finita no se avisa (el receptor cuenta un corte). El supervisor actual siempre envía DETENER antes de un tono nuevo.
+- Fase 4: si 4 × `getMinBufferSize` del Galaxy Y se acerca al objetivo de 500 ms del modo captura, el receptor no puede arrancar (AudioFlinger no suena hasta llenar su buffer). Hay que decidirlo con el `getMinBufferSize` medido en esta fase.
 
 **Lint, APK y SDK real:**
 - Lint sin problemas en core, receptor y emisor.

@@ -385,4 +385,64 @@ public class SesionTest {
         }
         assertNull(esperarReceptor());
     }
+
+    /** Un flujo cuyo close() no desbloquea la lectura (como algunos sockets Bluetooth). */
+    private static final class FlujoTerco extends java.io.InputStream {
+        private final byte[] inicio;
+        private int pos;
+
+        FlujoTerco(byte[] inicio) {
+            this.inicio = inicio;
+        }
+
+        @Override
+        public int read() throws IOException {
+            byte[] b = new byte[1];
+            return read(b, 0, 1) < 0 ? -1 : b[0] & 0xFF;
+        }
+
+        @Override
+        public synchronized int read(byte[] b, int desde, int n) throws IOException {
+            if (pos < inicio.length) {
+                int k = Math.min(n, inicio.length - pos);
+                System.arraycopy(inicio, pos, b, desde, k);
+                pos += k;
+                return k;
+            }
+            try {
+                wait(); // nunca llega nada más y close() no lo despierta
+            } catch (InterruptedException e) {
+                throw new IOException("interrumpido");
+            }
+            return -1;
+        }
+    }
+
+    @Test(timeout = 20000)
+    public void cerrarDespiertaAlQueEsperaAunqueElLectorSigaBloqueado() throws Exception {
+        java.io.ByteArrayOutputStream hello = new java.io.ByteArrayOutputStream();
+        new EscritorTramas(hello).hello(HELLO);
+        final SesionEmisor sesion = new SesionEmisor(new FlujoTerco(hello.toByteArray()),
+                new java.io.ByteArrayOutputStream());
+        sesion.esperarHello();
+        final AtomicReference<Object> resultado = new AtomicReference<Object>();
+        final long[] duracion = {0};
+        Thread esperando = new Thread(() -> {
+            long t0 = System.nanoTime();
+            try {
+                sesion.ping(); // el PONG nunca llega
+                resultado.set("sin error");
+            } catch (IOException e) {
+                resultado.set(e);
+            }
+            duracion[0] = System.nanoTime() - t0;
+        });
+        esperando.start();
+        Thread.sleep(200);
+        sesion.cerrar();
+        esperando.join(10000);
+        assertTrue(resultado.get() instanceof IOException);
+        assertTrue("ping debió terminar al cerrar, no a los 5 s: " + duracion[0] / 1000000 + " ms",
+                duracion[0] < 3000000000L);
+    }
 }

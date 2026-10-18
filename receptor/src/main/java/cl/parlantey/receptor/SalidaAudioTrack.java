@@ -16,7 +16,7 @@ final class SalidaAudioTrack implements Salida {
 
     static final int FACTOR_BUFFER = 4;
 
-    private AudioTrack pista;
+    private Pista pista;
     private int canales;
     private int capacidad;
 
@@ -25,7 +25,6 @@ final class SalidaAudioTrack implements Salida {
     volatile int capacidadFramesPublicada;
 
     @Override
-    @SuppressWarnings("deprecation") // el constructor de 2.3 (AudioTrack.Builder es de API 23)
     public boolean abrir(int tasa, int canales) {
         int formato = canales == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
         int min = AudioTrack.getMinBufferSize(tasa, formato, AudioFormat.ENCODING_PCM_16BIT);
@@ -34,10 +33,9 @@ final class SalidaAudioTrack implements Salida {
             return false;
         }
         int bytes = FACTOR_BUFFER * min;
-        AudioTrack p;
+        Pista p;
         try {
-            p = new AudioTrack(AudioManager.STREAM_MUSIC, tasa, formato, AudioFormat.ENCODING_PCM_16BIT,
-                    bytes, AudioTrack.MODE_STREAM);
+            p = new Pista(tasa, formato, bytes);
         } catch (IllegalArgumentException e) {
             Log.w(Registro.TAG, "AudioTrack rechazó " + tasa + " Hz × " + canales, e);
             return false;
@@ -49,11 +47,14 @@ final class SalidaAudioTrack implements Salida {
         }
         pista = p;
         this.canales = canales;
-        this.capacidad = bytes / (2 * canales);
+        // El tamaño real del buffer: AudioFlinger no suena hasta llenarlo, y el reproductor
+        // detecta una salida trabada cuando está lleno y la posición no avanza.
+        int nativos = p.framesNativos();
+        this.capacidad = nativos > 0 ? nativos : bytes / (2 * canales);
         minBufferBytes = min;
         capacidadFramesPublicada = capacidad;
         Log.i(Registro.TAG, "AudioTrack " + tasa + " Hz × " + canales + ": getMinBufferSize " + min
-                + " B, buffer " + bytes + " B = " + capacidad + " frames ("
+                + " B, buffer pedido " + bytes + " B, real " + capacidad + " frames ("
                 + (capacidad * 1000L / tasa) + " ms)");
         return true;
     }
@@ -118,6 +119,19 @@ final class SalidaAudioTrack implements Salida {
         if (pista != null) {
             pista.release();
             pista = null;
+        }
+    }
+
+    /** AudioTrack de 2.3 con acceso a su frameCount nativo (protegido desde API 3). */
+    private static final class Pista extends AudioTrack {
+        @SuppressWarnings("deprecation") // el constructor de 2.3 (AudioTrack.Builder es de API 23)
+        Pista(int tasa, int formato, int bytes) {
+            super(AudioManager.STREAM_MUSIC, tasa, formato, AudioFormat.ENCODING_PCM_16BIT, bytes, MODE_STREAM);
+        }
+
+        @SuppressWarnings("deprecation")
+        int framesNativos() {
+            return getNativeFrameCount();
         }
     }
 

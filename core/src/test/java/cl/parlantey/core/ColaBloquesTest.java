@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -141,5 +142,28 @@ public class ColaBloquesTest {
             libres++;
         }
         assertEquals(total, libres);
+    }
+
+    /** Un aviso entre leer eventos() y esperar no se pierde: la espera vuelve enseguida. */
+    @Test(timeout = 5000)
+    public void esperarTrasNoPierdeAvisos() {
+        ColaBloques cola = new ColaBloques(4, 520);
+        cola.nuevaGeneracion(CONFIG);
+        long visto = cola.eventos();
+        cola.encolar(cola.tomarLibre(), 0); // llega antes de que el hilo de audio espere
+        long t0 = System.nanoTime();
+        cola.esperarTras(visto, 3000);
+        assertTrue("no debió esperar", System.nanoTime() - t0 < 1000000000L);
+
+        visto = cola.eventos();
+        cola.despertar();
+        t0 = System.nanoTime();
+        cola.esperarTras(visto, 3000);
+        assertTrue(System.nanoTime() - t0 < 1000000000L);
+
+        visto = cola.eventos();
+        t0 = System.nanoTime();
+        cola.esperarTras(visto, 100); // sin avisos: espera el plazo
+        assertTrue(System.nanoTime() - t0 >= 90000000L);
     }
 }

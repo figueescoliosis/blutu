@@ -220,7 +220,7 @@ public class SinAsignacionesTest {
     public void pipelineDelEmisor() {
         // Objetivo enorme: el control de flujo nunca frena y cada paso arma y envía un bloque.
         PipelineEmisor p = new PipelineEmisor(new FuenteTono(96000, 2), Preset.SEGURA, null, 0xFFFFFFFFL);
-        p.conectar(new EscritorTramas(NULO), () -> null, 4000);
+        p.conectar(new EscritorTramas(NULO), () -> null);
         sinAsignar("PipelineEmisor.paso (96 kHz estéreo → 24 kHz mono)", 300, () -> {
             try {
                 for (int i = 0; i < 300; i++) {

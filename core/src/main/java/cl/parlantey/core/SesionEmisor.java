@@ -363,6 +363,9 @@ public final class SesionEmisor {
      */
     public void cerrar() {
         cerrada = true;
+        synchronized (this) {
+            notifyAll(); // quien espera un PONG, un STATE o el TEST_RESULT ve que está cerrada
+        }
         cerrarSilencioso(entrada);
         cerrarSilencioso(salidaFlujo);
         Thread t = hiloLector;

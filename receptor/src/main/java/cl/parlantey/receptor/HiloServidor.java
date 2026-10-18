@@ -45,6 +45,7 @@ final class HiloServidor extends Thread {
     }
 
     private static final long ESPERA_MAX_MS = 10000;
+    private static final long ESPERA_DESPEDIDA_NS = 1000000000L;
 
     private final BluetoothAdapter adaptador;
     private final Hello hello;
@@ -53,6 +54,8 @@ final class HiloServidor extends Thread {
     private final Oyente oyente;
 
     private volatile boolean activo = true;
+    /** "Detener receptor": cada conexión (también una recién aceptada) se despide con BYE(0). */
+    private volatile boolean despidiendo;
     private volatile Closeable abierto;
     private volatile SesionReceptor sesion;
 
@@ -72,15 +75,23 @@ final class HiloServidor extends Thread {
         interrupt();
     }
 
-    /** "Detener receptor": BYE(0) al emisor conectado (si hay) y detiene el hilo. */
+    /**
+     * "Detener receptor": BYE(0) al emisor conectado (si hay), espera hasta 1 s a que el emisor
+     * cierre (así el BYE llega antes que el cierre del socket) y detiene el hilo. Bloquea: llamarlo
+     * fuera del hilo principal.
+     */
     void despedirYDetener() {
-        activo = false;
+        despidiendo = true;
         SesionReceptor s = sesion;
         if (s != null) {
             try {
                 s.despedir();
             } catch (IOException ignorada) {
                 // Se cierra igual.
+            }
+            long fin = System.nanoTime() + ESPERA_DESPEDIDA_NS;
+            while (sesion == s && System.nanoTime() - fin < 0) {
+                dormir(50); // el emisor cierra al recibir BYE: la lectura termina sola
             }
         }
         detener();
@@ -162,6 +173,9 @@ final class HiloServidor extends Thread {
         try {
             s.iniciar();
             sesion = s;
+            if (despidiendo) {
+                s.despedir(); // "Detener receptor" llegó mientras se aceptaba esta conexión
+            }
             estado.start();
             int codigo;
             do {

@@ -24,6 +24,8 @@ final class SalidaFalsa implements Salida {
     int maxPorEscritura = Integer.MAX_VALUE;
     /** escribir devuelve 0 mientras sea true. */
     boolean escrituraRota;
+    /** La posición no avanza (AudioFlinger colgado) hasta que se vuelva a abrir. */
+    boolean trabada;
 
     // Estado.
     private Thread hilo;
@@ -94,6 +96,7 @@ final class SalidaFalsa implements Salida {
         }
         aperturas++;
         abierta = true;
+        trabada = false;
         this.tasa = tasa;
         this.canales = canales;
         sonando = false;
@@ -193,7 +196,7 @@ final class SalidaFalsa implements Salida {
     /** Avanza el tiempo virtual: el mezclador consume de a {@code granularidad} frames. */
     void avanzar(long nanos) {
         nanosAcumulados += nanos;
-        if (!abierta || !sonando || llenando) {
+        if (!abierta || !sonando || llenando || trabada) {
             return;
         }
         fraccion += nanos * tasa;
@@ -208,6 +211,17 @@ final class SalidaFalsa implements Salida {
                 faltas++; // underrun: el mezclador pone silencio y la posición no avanza
             }
         }
+    }
+
+    /**
+     * Como cuando muere mediaserver en 2.3: AudioTrack se recrea solo por dentro, vacío, con la
+     * posición en 0 y esperando llenarse; quien escribe no se entera.
+     */
+    void recrearSola() {
+        pendiente = 0;
+        posicion = 0;
+        llenando = true;
+        fraccion = 0;
     }
 
     boolean sonando() {

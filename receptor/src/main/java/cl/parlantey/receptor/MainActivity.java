@@ -8,6 +8,7 @@ import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -28,6 +29,7 @@ public class MainActivity extends Activity {
     private static final int PEDIR_VISIBLE = 2;
     private static final int DURACION_VISIBLE_S = 300;
     private static final long REFRESCO_MS = 250;
+    private static final long EVENTO_LOCAL_MS = 15000;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -45,6 +47,10 @@ public class MainActivity extends Activity {
 
     /** Mensaje de la actividad (visibilidad, Bluetooth rechazado); tapa al del servicio. */
     private String eventoLocal = "";
+    /** SystemClock.elapsedRealtime en que el mensaje local deja de mostrarse. */
+    private long eventoLocalHastaMs;
+    /** Último mensaje del servicio visto: uno nuevo reemplaza al mensaje local. */
+    private String eventoServicioVisto = "";
     /** Se leen del disco una vez por onResume, no en cada refresco. */
     private String errorGuardado = "";
     private int reinicios;
@@ -130,13 +136,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == PEDIR_ENCENDER && resultCode != RESULT_OK) {
-            eventoLocal = getString(R.string.evento_bt_rechazado);
+            mostrarLocal(getString(R.string.evento_bt_rechazado), EVENTO_LOCAL_MS);
         } else if (requestCode == PEDIR_VISIBLE) {
             // Con ACTION_REQUEST_DISCOVERABLE, resultCode es la duración en segundos.
-            eventoLocal = resultCode == RESULT_CANCELED
-                    ? getString(R.string.evento_visible_cancelado)
-                    : getString(R.string.evento_visible, resultCode);
+            if (resultCode == RESULT_CANCELED) {
+                mostrarLocal(getString(R.string.evento_visible_cancelado), EVENTO_LOCAL_MS);
+            } else {
+                mostrarLocal(getString(R.string.evento_visible, resultCode), resultCode * 1000L);
+            }
         }
+    }
+
+    /** Mensaje de la pantalla por {@code ms}; un mensaje nuevo del servicio lo reemplaza antes. */
+    private void mostrarLocal(String mensaje, long ms) {
+        eventoLocal = mensaje;
+        eventoLocalHastaMs = SystemClock.elapsedRealtime() + ms;
     }
 
     /** BluetoothManager (API 18) no existe en 2.3: getDefaultAdapter() es la única vía. */
@@ -208,7 +222,17 @@ public class MainActivity extends Activity {
             formato.setText(c == null ? getString(R.string.formato_ninguno) : textoFormato(c, decod));
         }
 
-        String ev = eventoLocal.length() > 0 ? eventoLocal : s.evento;
+        String delServicio = s.evento;
+        if (!delServicio.equals(eventoServicioVisto)) {
+            eventoServicioVisto = delServicio;
+            if (delServicio.length() > 0) {
+                eventoLocal = ""; // un error de conexión o de versión no debe quedar tapado
+            }
+        }
+        if (eventoLocal.length() > 0 && SystemClock.elapsedRealtime() > eventoLocalHastaMs) {
+            eventoLocal = "";
+        }
+        String ev = eventoLocal.length() > 0 ? eventoLocal : delServicio;
         if (!ev.equals(vEvento)) {
             vEvento = ev;
             evento.setText(ev.length() == 0 ? getString(R.string.evento_ninguno) : ev);

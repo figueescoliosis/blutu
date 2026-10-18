@@ -51,14 +51,16 @@ public class SimulacionTest {
 
     private static final class Simulacion implements PipelineEmisor.Estados {
         final long[] ahora = {0};
-        final EnlaceSimulado er = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
-        final EnlaceSimulado re = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
+        EnlaceSimulado er = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
+        EnlaceSimulado re = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
         final ColaBloques cola = new ColaBloques(188, 1032);
         final SalidaFalsa salida;
         final Reproductor reproductor;
-        final SesionReceptor receptor;
-        final LectorTramas lectorEmisor = new LectorTramas(re.entrada);
-        final EscritorTramas escritorEmisor = new EscritorTramas(er.salida);
+        SesionReceptor receptor;
+        LectorTramas lectorEmisor = new LectorTramas(re.entrada);
+        EscritorTramas escritorEmisor = new EscritorTramas(er.salida);
+        /** Primer STATE recibido en la conexión actual. */
+        Estado primerEstado;
         PipelineEmisor pipeline;
 
         Estado estado;
@@ -84,15 +86,41 @@ public class SimulacionTest {
         Simulacion(PipelineEmisor pipeline, int capacidadSalida, int granularidad) throws IOException {
             salida = new SalidaFalsa(capacidadSalida, granularidad, 0, 0);
             reproductor = new Reproductor(cola, salida, HELLO.capacidadBufferMs);
+            this.pipeline = pipeline;
+            iniciarConexion();
+        }
+
+        /** HELLO del receptor; el emisor lo lee y conecta el pipeline. */
+        private void iniciarConexion() throws IOException {
             receptor = new SesionReceptor(er.entrada, re.salida, HELLO, cola, reproductor, null, () -> ahora[0]);
             receptor.iniciar();
-            this.pipeline = pipeline;
-            // El emisor lee el HELLO y conecta el pipeline.
             re.avanzar(MS);
             if (!re.tramaCompleta() || lectorEmisor.leer() != Protocolo.HELLO) {
                 fail("no llegó el HELLO");
             }
-            pipeline.conectar(escritorEmisor, this, HELLO.capacidadBufferMs);
+            if (pipeline != null) {
+                pipeline.conectar(escritorEmisor, this);
+            }
+        }
+
+        /**
+         * Se corta el enlace (lo que estaba en tránsito se pierde) y el emisor reconecta: enlaces y
+         * sesión nuevos, pero la misma cola y el mismo reproductor, como en ServicioReceptor.
+         */
+        void reconectar() throws IOException {
+            receptor.terminar();
+            pasosAudio(ahora[0]);
+            if (pipeline != null) {
+                pipeline.desconectar();
+            }
+            er = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
+            re = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
+            lectorEmisor = new LectorTramas(re.entrada);
+            escritorEmisor = new EscritorTramas(er.salida);
+            estado = null;
+            primerEstado = null;
+            receptorCerro = false;
+            iniciarConexion();
         }
 
         @Override
@@ -150,6 +178,9 @@ public class SimulacionTest {
                 int tipo = lectorEmisor.leer();
                 if (tipo == Protocolo.STATE) {
                     estado = Estado.leer(lectorEmisor.datos());
+                    if (primerEstado == null) {
+                        primerEstado = estado;
+                    }
                     estadosRecibidos++;
                 } else if (tipo == Protocolo.BYE) {
                     byeRecibido = lectorEmisor.datos().readUnsignedByte();
@@ -321,7 +352,7 @@ public class SimulacionTest {
         long seqAntes = s.cola.ultimoSeq();
         assertTrue(seqAntes > 400);
         s.pipeline = tono(Preset.ALTA);
-        s.pipeline.conectar(s.escritorEmisor, s, 4000);
+        s.pipeline.conectar(s.escritorEmisor, s);
         s.correr(5000);
         assertEquals(Reproductor.SONANDO, s.reproductor.estado());
         assertEquals(2, s.salida.canales());
@@ -365,5 +396,42 @@ public class SimulacionTest {
         s.receptorCerro = true;
         s.correr(100);
         assertEquals(Protocolo.BYE_PROTOCOLO, s.byeRecibido);
+    }
+
+    /**
+     * Reconexión con la misma cola y el mismo reproductor (como en el servicio): una PAUSA de la
+     * conexión anterior no deja mudo al receptor, el primer STATE no trae ultimoSeq ni cortes de
+     * antes y una reconexión rápida no llena el buffer de más.
+     */
+    @Test
+    public void reconectarNoArrastraNadaDeLaConexionAnterior() throws IOException {
+        Simulacion s = new Simulacion(tono(Preset.ALTA), 8192, 1024);
+        s.correr(1000); // conexión corta: ~94 bloques enviados, ultimoSeq alto
+        s.er.pausado = true; // un corte de 3 s antes: 1 corte en esta conexión
+        s.correr(3000);
+        s.er.pausado = false;
+        s.correr(2000);
+        assertEquals(1, s.reproductor.cortes());
+        s.escritorEmisor.control(Protocolo.CONTROL_PAUSA);
+        s.correr(200);
+        assertTrue(s.reproductor.pausado());
+
+        s.reconectar();
+        s.bufferMaxMs = 0;
+        s.correr(6000);
+        assertEquals("el primer STATE es de esta conexión", Protocolo.SEQ_NINGUNO, s.primerEstado.ultimoSeq);
+        assertEquals("y sus cortes también", 0, s.primerEstado.cortes);
+        assertEquals("la pausa no pasa a la conexión nueva", Reproductor.SONANDO, s.reproductor.estado());
+        assertTrue(s.estado.reproduciendo);
+        assertTrue("buffer máximo " + s.bufferMaxMs + " ms", s.bufferMaxMs <= 2100);
+        assertEquals(0, s.reproductor.cortes());
+
+        // Y otra reconexión enseguida (enlace inestable): tampoco se llena de más.
+        s.correr(500);
+        s.reconectar();
+        s.bufferMaxMs = 0;
+        s.correr(6000);
+        assertTrue("buffer máximo " + s.bufferMaxMs + " ms", s.bufferMaxMs <= 2100);
+        assertEquals(Reproductor.SONANDO, s.reproductor.estado());
     }
 }

@@ -73,7 +73,6 @@ public final class PipelineEmisor {
     // --- Conexión actual.
     private EscritorTramas escritor;
     private Estados estados;
-    private int maxEnVuelo;
     private boolean configEnviado;
     private long seqEnviado;
     /** Primer seq enviado después del último corte (inicio del pipeline en la conexión, o VACIAR). */
@@ -115,15 +114,10 @@ public final class PipelineEmisor {
     /**
      * Empieza a usar una conexión: lo próximo que se envía es CONFIG + TRACK, y el primer AUDIO lleva
      * el seq siguiente a {@link EscritorTramas#ultimoSeqAudio()} (0 si la conexión es nueva).
-     *
-     * @param capacidadMs capacidadBufferMs del HELLO: un STATE con más bloques en vuelo se ignora
      */
-    public void conectar(EscritorTramas escritor, Estados estados, long capacidadMs) {
+    public void conectar(EscritorTramas escritor, Estados estados) {
         this.escritor = escritor;
         this.estados = estados;
-        long ms = Math.max(capacidadMs, config.bufferObjetivoMs);
-        this.maxEnVuelo = (int) Math.min(Integer.MAX_VALUE,
-                ms * config.sampleRate / 1000 / config.muestrasPorBloque + 2);
         configEnviado = false;
         seqEnviado = escritor.ultimoSeqAudio();
         seqCorte = Seq.siguiente(seqEnviado);
@@ -215,7 +209,8 @@ public final class PipelineEmisor {
         if (e != null) {
             int trasCorte = Seq.distancia(e.ultimoSeq, seqCorte);
             int enVuelo = Seq.distancia(seqEnviado, e.ultimoSeq);
-            if (trasCorte >= 0 && enVuelo >= 0 && enVuelo <= maxEnVuelo) {
+            // Con muchos bloques en vuelo, el nivel ya supera el objetivo: no hace falta otro tope.
+            if (trasCorte >= 0 && enVuelo >= 0) {
                 return e.bufferMs + config.msParaBloques(enVuelo);
             }
         }

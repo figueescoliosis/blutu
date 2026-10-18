@@ -237,7 +237,7 @@ class Supervisor(
         cortesBase = 0
         pipeline?.let { p ->
             // Reconexión con el tono en curso: CONFIG + TRACK de nuevo y sigue sonando.
-            p.conectar(s.escritor(), s::estado, hello.capacidadBufferMs)
+            p.conectar(s.escritor(), s::estado)
             s.setAudioActivo(true)
             resumen = resumen?.copy(reconexiones = resumen!!.reconexiones + 1)
         }
@@ -303,7 +303,7 @@ class Supervisor(
                     Track("Tono de prueba", "440 Hz", 0),
                     PipelineEmisor.OBJETIVO_ARCHIVOS_MS,
                 )
-                p.conectar(s.escritor(), s::estado, hello.capacidadBufferMs)
+                p.conectar(s.escritor(), s::estado)
                 s.setAudioActivo(true)
                 pipeline = p
                 cortesPrevios = 0

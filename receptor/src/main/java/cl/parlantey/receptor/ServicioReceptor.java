@@ -263,6 +263,9 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
     @Override
     @SuppressLint("WakelockTimeout") // se suelta al terminar la conexión, que puede durar horas
     public void conectado(String nombre) {
+        if (instancia != this) {
+            return; // el servicio ya terminó: no tomar un wake lock que nadie soltaría
+        }
         estadoConexion = CONECTADO;
         emisor = nombre;
         track = null;
@@ -401,12 +404,20 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
             prioridadEfectiva = Process.getThreadPriority(Process.myTid());
             Log.i(Registro.TAG, "hilo de audio con prioridad " + prioridadEfectiva + " (pedida "
                     + Process.THREAD_PRIORITY_URGENT_AUDIO + ")");
+            long ultimoErrorGuardado = 0;
             while (activo) {
                 try {
+                    // Leer el contador antes del paso: un aviso (bloque, VACIAR, PAUSA) que llegue
+                    // entre el paso y la espera no se pierde.
+                    long eventos = cola.eventos();
                     long espera = reproductor.paso(System.nanoTime());
-                    cola.esperar(espera);
+                    cola.esperarTras(eventos, espera);
                 } catch (Throwable t) {
-                    Registro.guardarError(ServicioReceptor.this, "audio", t);
+                    long ahora = System.nanoTime();
+                    if (ultimoErrorGuardado == 0 || ahora - ultimoErrorGuardado > 10000000000L) {
+                        ultimoErrorGuardado = ahora; // a disco como mucho cada 10 s
+                        Registro.guardarError(ServicioReceptor.this, "audio", t);
+                    }
                     cola.esperar(100);
                 }
             }

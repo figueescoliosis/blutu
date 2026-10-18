@@ -173,7 +173,7 @@ public class PipelineEmisorTest {
     public void empiezaConConfigYTrackYSeqCero() throws IOException {
         PipelineEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         assertEquals(0, p.paso(0));
         assertEquals(0, p.paso(0));
         List<Trama> t = con.nuevas();
@@ -191,7 +191,7 @@ public class PipelineEmisorTest {
     public void sinStateEnviaSoloHastaElObjetivo() throws IOException {
         PipelineEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         assertEquals(PipelineEmisor.ESPERA_LLENO_MS, hastaEsperar(p));
         // 94 bloques de 21,333 ms = 2005 ms: el primer nivel ≥ 2000.
         assertEquals(94, contar(con.nuevas(), Protocolo.AUDIO));
@@ -208,7 +208,7 @@ public class PipelineEmisorTest {
     public void conStateRellenaLoQueSeReprodujo() throws IOException {
         PipelineEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         hastaEsperar(p);
         con.nuevas();
         con.estado = new Estado(1000, 0, 93, true); // todo recibido; queda 1 s en el receptor
@@ -227,7 +227,7 @@ public class PipelineEmisorTest {
     public void stateDeOtraConexionSeIgnora() throws IOException {
         PipelineEmisor p = tono(48000, 2, Preset.NORMAL);
         Conexion vieja = new Conexion();
-        p.conectar(vieja.escritor, vieja, 4000);
+        p.conectar(vieja.escritor, vieja);
         for (int i = 0; i < 3; i++) {
             vieja.estado = new Estado(500, 0, p.seqEnviado(), true);
             hastaEsperar(p);
@@ -237,7 +237,7 @@ public class PipelineEmisorTest {
 
         Conexion nueva = new Conexion();
         nueva.estado = new Estado(0, 0, 200, true); // como si fuera de la conexión anterior
-        p.conectar(nueva.escritor, nueva, 4000);
+        p.conectar(nueva.escritor, nueva);
         hastaEsperar(p);
         List<Trama> t = nueva.nuevas();
         assertEquals("CONFIG de nuevo al reconectar", Protocolo.CONFIG, t.get(0).tipo);
@@ -255,7 +255,7 @@ public class PipelineEmisorTest {
     public void trasVaciarIgnoraElStateViejo() throws IOException {
         PipelineEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         hastaEsperar(p);
         con.estado = new Estado(1900, 0, 93, true);
         con.nuevas();
@@ -276,7 +276,7 @@ public class PipelineEmisorTest {
     public void detenerEnviaDetenerYTermina() throws IOException {
         PipelineEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         hastaEsperar(p);
         con.nuevas();
         p.pedirDetener();
@@ -294,7 +294,7 @@ public class PipelineEmisorTest {
         short[] senal = Senales.sintetica(2560, 1, 5); // 2,5 bloques
         PipelineEmisor p = new PipelineEmisor(new FuenteTrozos(senal, 44100, 1, -1), Preset.NORMAL, null, 2000);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         assertEquals(PipelineEmisor.FIN, hastaEsperar(p));
         List<Trama> t = con.nuevas();
         assertEquals(Protocolo.CONFIG, t.get(0).tipo);
@@ -330,7 +330,7 @@ public class PipelineEmisorTest {
         };
         PipelineEmisor p = new PipelineEmisor(vacia, Preset.ALTA, TONO, 500);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 4000);
+        p.conectar(con.escritor, con);
         assertEquals(PipelineEmisor.ESPERA_SIN_DATOS_MS, p.paso(0));
         assertEquals(0, contar(con.nuevas(), Protocolo.AUDIO));
     }
@@ -358,7 +358,7 @@ public class PipelineEmisorTest {
     private static List<byte[]> bloques(PipelineEmisor.Fuente fuente, Preset preset) throws IOException {
         PipelineEmisor p = new PipelineEmisor(fuente, preset, null, 1000000);
         Conexion con = new Conexion();
-        p.conectar(con.escritor, con, 1000000);
+        p.conectar(con.escritor, con);
         for (int i = 0; i < 1000000 && p.paso(0) != PipelineEmisor.FIN; i++) {
             // sigue
         }
@@ -378,7 +378,7 @@ public class PipelineEmisorTest {
             PipelineEmisor p = tono(48000, 2, preset);
             Config c = p.config();
             Conexion con = new Conexion();
-            p.conectar(con.escritor, con, 4000);
+            p.conectar(con.escritor, con);
             hastaEsperar(p);
             List<Trama> t = con.nuevas();
             int bloques = contar(t, Protocolo.AUDIO);

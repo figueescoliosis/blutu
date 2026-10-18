@@ -29,6 +29,14 @@ public final class Reproductor {
     private static final double FRACCION_ARRANQUE = 0.7;
     /** Si la salida no se pudo abrir, se reintenta cada 1 s. */
     private static final long REINTENTO_ABRIR_NS = 1000000000L;
+    /**
+     * Salida llena cuya posición no avanza en 1,5 s (o retrocede sin que la vaciemos): AudioTrack
+     * quedó trabado o se recreó solo (p. ej. murió mediaserver). Se reabre.
+     */
+    static final long SALIDA_TRABADA_NS = 1500000000L;
+
+    /** Muestras (todos los canales) que caben en un bloque decodificado: los CONFIG con más se rechazan. */
+    public static final int MAX_MUESTRAS_BLOQUE = Protocolo.MAX_CANALES * Protocolo.MUESTRAS_POR_BLOQUE;
 
     private final ColaBloques cola;
     private final Salida salida;
@@ -66,6 +74,10 @@ public final class Reproductor {
     /** Frames reales escritos desde que empezó a sonar (saturado en la capacidad de la salida). */
     private int framesDesdeArranque;
     private long ultimoIntentoAbrirNs;
+    /** Última posición vista de la salida y desde cuándo no cambia (detección de salida trabada). */
+    private int ultimaPosicion;
+    private long posicionDesdeNs;
+    private boolean vigilarPosicion;
 
     // --- Pedidos de otros hilos.
     private volatile boolean pausaPedida;
@@ -92,7 +104,7 @@ public final class Reproductor {
         this.cola = cola;
         this.salida = salida;
         this.capacidadMs = capacidadMs;
-        this.pcm = new short[Protocolo.MAX_CANALES * Protocolo.MUESTRAS_POR_BLOQUE];
+        this.pcm = new short[MAX_MUESTRAS_BLOQUE];
         this.silencio = new short[pcm.length];
     }
 
@@ -104,10 +116,18 @@ public final class Reproductor {
         cola.despertar();
     }
 
-    /** Pone en cero cortes y métricas (al empezar una conexión). Lo aplica el hilo de audio. */
+    /**
+     * Pone en cero cortes y métricas (al empezar una conexión). Lo aplica el hilo de audio en su
+     * próximo paso; mientras tanto {@link #reinicioPendiente()} es true.
+     */
     public void reiniciarMetricas() {
         reinicioMetricasPedido = true;
         cola.despertar();
+    }
+
+    /** true si {@link #reiniciarMetricas} todavía no se aplicó (las métricas son de antes). */
+    public boolean reinicioPendiente() {
+        return reinicioMetricasPedido;
     }
 
     // --- Hilo de audio.
@@ -118,7 +138,6 @@ public final class Reproductor {
      */
     public long paso(long ahoraNs) {
         if (reinicioMetricasPedido) {
-            reinicioMetricasPedido = false;
             cortes = 0;
             subcortes = 0;
             erroresSalida = 0;
@@ -127,6 +146,7 @@ public final class Reproductor {
             decodBloques = 0;
             decodNsMax = 0;
             intervaloMaxNs = 0;
+            reinicioMetricasPedido = false; // después de poner en cero: el STATE espera a esto
         }
 
         int gen;
@@ -246,7 +266,11 @@ public final class Reproductor {
             salida.pausar();
             ultimaEscrituraNs = 0;
         } else if (cola.enCola() < umbralBloques && pendienteReal() < config.muestrasPorBloque) {
-            estado = LLENANDO; // REANUDAR sin datos: vuelve a llenar, sin contar corte
+            // REANUDAR sin datos: vuelve a llenar, sin contar corte.
+            if (estado == RELLENANDO) {
+                marcarSilencioDelante(); // lo que quedó en la salida es silencio de relleno
+            }
+            estado = LLENANDO;
         } else {
             arrancar(estado);
         }
@@ -265,15 +289,21 @@ public final class Reproductor {
         estado = nuevoEstado;
         framesDesdeArranque = 0;
         ultimaEscrituraNs = 0;
+        vigilarPosicion = false; // la salida tarda en arrancar: se empieza a vigilar al llenarla
         salida.reproducir();
+    }
+
+    /** El audio real que se escriba desde ahora queda detrás del silencio ya escrito. */
+    private void marcarSilencioDelante() {
+        soltarActual();
+        inicioReal = escritos;
+        silencioDelante = true;
     }
 
     private long pasoSonando(long ahoraNs) {
         int bloque = config.muestrasPorBloque;
         if (estado == RELLENANDO && cola.enCola() >= umbralBloques) {
-            soltarActual(); // el resto del bloque de silencio en curso no hace falta
-            inicioReal = escritos;
-            silencioDelante = true;
+            marcarSilencioDelante(); // y el resto del bloque de silencio en curso no hace falta
             estado = SONANDO;
             framesDesdeArranque = 0; // lo pendiente es silencio: como un arranque
         }
@@ -314,6 +344,7 @@ public final class Reproductor {
     }
 
     private void decodificar(ColaBloques.Bloque b) {
+        actual = b; // antes de decodificar: pase lo que pase, el bloque vuelve al pool
         long t0 = System.nanoTime();
         ImaAdpcm.decodificarBloque(b.datos, 0, config.canales, config.muestrasPorBloque, pcm, 0);
         long d = System.nanoTime() - t0;
@@ -322,7 +353,6 @@ public final class Reproductor {
         if (d > decodNsMax) {
             decodNsMax = d;
         }
-        actual = b;
         porEscribir = pcm;
         desde = 0;
         frames = config.muestrasPorBloque;
@@ -332,6 +362,15 @@ public final class Reproductor {
         int libre = capacidad - pendienteTotal();
         int resto = frames - desde;
         if (libre <= 0) {
+            if (salidaTrabada(ahoraNs)) {
+                erroresSalida++;
+                soltarActual();
+                if (reabrir(config)) {
+                    reiniciarPosicion();
+                    estado = LLENANDO;
+                }
+                return 0;
+            }
             // La salida está llena: esperar a que haya lugar para lo que falta (sin bloquear).
             return Math.max(1, config.msParaFrames(Math.min(resto, config.muestrasPorBloque / 4)));
         }
@@ -386,6 +425,29 @@ public final class Reproductor {
         escritos = salida.framesReproducidos();
         finReal = escritos;
         silencioDelante = false;
+        vigilarPosicion = false;
+    }
+
+    /**
+     * Con la salida llena (según lo escrito) y sonando: true si su posición no avanza hace
+     * {@link #SALIDA_TRABADA_NS} o si retrocedió. Una salida que todavía se está llenando no
+     * cuenta: AudioFlinger no la hace sonar hasta llenarla.
+     */
+    private boolean salidaTrabada(long ahoraNs) {
+        int posicion = salida.framesReproducidos();
+        if (!vigilarPosicion) {
+            vigilarPosicion = true;
+            ultimaPosicion = posicion;
+            posicionDesdeNs = ahoraNs;
+            return false;
+        }
+        if (posicion != ultimaPosicion) {
+            boolean atras = posicion - ultimaPosicion < 0;
+            ultimaPosicion = posicion;
+            posicionDesdeNs = ahoraNs;
+            return atras;
+        }
+        return ahoraNs - posicionDesdeNs > SALIDA_TRABADA_NS;
     }
 
     /** Frames escritos que la salida aún no reproduce (32 bits con vuelta). */
@@ -399,6 +461,9 @@ public final class Reproductor {
             return 0;
         }
         int posicion = salida.framesReproducidos();
+        if (finReal - posicion < 0) {
+            finReal = posicion; // ya sonó: que la resta no dé la vuelta tras 2³¹ frames
+        }
         int pendiente = limitar(finReal - posicion);
         if (silencioDelante) {
             int silencio = inicioReal - posicion;
@@ -434,6 +499,9 @@ public final class Reproductor {
      */
     public long bufferMs() {
         Config c = configPublicada;
+        if (c == null) {
+            c = cola.config(); // la salida no se pudo abrir todavía: igual cuenta lo encolado
+        }
         if (c == null) {
             return 0;
         }

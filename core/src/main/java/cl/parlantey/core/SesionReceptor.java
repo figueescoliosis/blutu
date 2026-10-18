@@ -61,15 +61,23 @@ public final class SesionReceptor {
         this.reloj = reloj;
     }
 
-    /** Envía HELLO. Siempre es la primera trama de la conexión. */
+    /**
+     * Envía HELLO. Siempre es la primera trama de la conexión. Lo de la conexión anterior no pasa
+     * a esta: {@code ultimoSeq} vuelve a {@link Protocolo#SEQ_NINGUNO}, la pausa se quita y las
+     * métricas (cortes) vuelven a 0 antes del primer STATE.
+     */
     public void iniciar() throws IOException {
+        if (cola != null) {
+            cola.reiniciarSeq();
+        }
+        if (reproductor != null) {
+            reproductor.pedirPausa(false);
+            reproductor.reiniciarMetricas();
+        }
         escritor.hello(hello);
         long ahora = reloj.nanos();
         nanosUltimaTrama = ahora;
         proximoEstadoNs = ahora;
-        if (reproductor != null) {
-            reproductor.reiniciarMetricas();
-        }
         iniciada = true;
     }
 
@@ -128,8 +136,10 @@ public final class SesionReceptor {
     }
 
     private void recibirConfig(Config c) throws ProtocoloException {
-        if (cola != null && c.bytesBloque() > cola.bytesPorBloque()) {
-            throw new ProtocoloException("muestrasPorBloque " + c.muestrasPorBloque + " no soportado por este receptor");
+        if (cola != null && (c.bytesBloque() > cola.bytesPorBloque()
+                || c.canales * c.muestrasPorBloque > Reproductor.MAX_MUESTRAS_BLOQUE)) {
+            throw new ProtocoloException("muestrasPorBloque " + c.muestrasPorBloque + " con " + c.canales
+                    + " canales no soportado por este receptor");
         }
         boolean mismoFormato = config != null && config.sampleRate == c.sampleRate
                 && config.canales == c.canales && config.muestrasPorBloque == c.muestrasPorBloque;
@@ -191,6 +201,9 @@ public final class SesionReceptor {
                 if (cola != null) {
                     cola.nuevaGeneracion(null);
                 }
+                if (reproductor != null) {
+                    reproductor.pedirPausa(false); // un audio nuevo empieza sin pausa
+                }
                 break;
             default:
                 break; // comando desconocido: se ignora
@@ -228,6 +241,9 @@ public final class SesionReceptor {
         if (ahoraNs - proximoEstadoNs < 0) {
             return true;
         }
+        if (reproductor != null && reproductor.reinicioPendiente()) {
+            return true; // que el primer STATE no lleve los cortes de la conexión anterior
+        }
         proximoEstadoNs += INTERVALO_ESTADO_NS;
         if (ahoraNs - proximoEstadoNs >= 0) {
             proximoEstadoNs = ahoraNs + INTERVALO_ESTADO_NS; // atrasado: no ponerse al día de golpe
@@ -253,11 +269,14 @@ public final class SesionReceptor {
         return Math.max(0, proximoEstadoNs - ahoraNs);
     }
 
-    /** Fin de la conexión: detiene la reproducción (como DETENER). */
+    /** Fin de la conexión: detiene la reproducción (como DETENER) y quita la pausa. */
     public void terminar() {
         config = null;
         if (cola != null) {
             cola.nuevaGeneracion(null);
+        }
+        if (reproductor != null) {
+            reproductor.pedirPausa(false);
         }
     }
 

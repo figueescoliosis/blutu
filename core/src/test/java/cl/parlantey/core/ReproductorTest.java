@@ -387,4 +387,105 @@ public class ReproductorTest {
         assertEquals(0, r.cortes());
         assertTrue(salida.framesReproducidos() < 0); // dio la vuelta
     }
+
+    @Test
+    public void salidaTrabadaSeReabre() {
+        arrancarEstereo();
+        encolar(ESTEREO, 60, 1000);
+        correr(500);
+        salida.trabada = true;
+        correr(1000);
+        assertEquals("todavía no: 1,5 s de margen", 0, r.erroresSalida());
+        correr(1000);
+        assertEquals(1, r.erroresSalida());
+        assertEquals(2, salida.aperturas);
+        encolar(ESTEREO, UMBRAL_ESTEREO, 1000);
+        correr(300);
+        assertEquals(Reproductor.SONANDO, r.estado());
+        long antes = salida.framesSonados;
+        correr(500);
+        assertTrue("vuelve a sonar", salida.framesSonados > antes);
+    }
+
+    @Test
+    public void salidaRecreadaPorDentroSeReabre() {
+        nuevo(new SalidaFalsa(C, 256, 0, 0));
+        arrancarEstereo();
+        encolar(ESTEREO, 60, 1000);
+        correr(1000);
+        salida.recrearSola(); // posición de vuelta a 0 y sin sonar: sin reabrir, quedaría muda
+        correr(100);
+        assertEquals(1, r.erroresSalida());
+        assertEquals(2, salida.aperturas);
+        correr(300);
+        assertEquals(Reproductor.SONANDO, r.estado());
+    }
+
+    @Test
+    public void pausaLargaNoEsSalidaTrabada() {
+        arrancarEstereo();
+        correr(300);
+        r.pedirPausa(true);
+        pasos();
+        correr(5000);
+        r.pedirPausa(false);
+        correr(300);
+        assertEquals(0, r.erroresSalida());
+        assertEquals(1, salida.aperturas);
+    }
+
+    /** Corte → PAUSA → REANUDAR sin datos → LLENANDO: lo que quedó en la salida es silencio. */
+    @Test
+    public void reanudarTrasCorteNoCuentaElSilencioComoAudio() {
+        arrancarEstereo();
+        correr(UMBRAL_ESTEREO * 22 + 200);
+        assertEquals(Reproductor.RELLENANDO, r.estado());
+        r.pedirPausa(true);
+        pasos();
+        r.pedirPausa(false);
+        pasos();
+        assertEquals("sin datos vuelve a llenar", Reproductor.LLENANDO, r.estado());
+        assertEquals(1, r.cortes());
+        encolar(ESTEREO, UMBRAL_ESTEREO, 1000);
+        pasos();
+        assertEquals(Reproductor.SONANDO, r.estado());
+        long enCola = ESTEREO.msParaBloques(cola.enCola());
+        long real = r.bufferMs() - enCola;
+        assertTrue("audio real pendiente " + real + " ms (sin el silencio de la salida)", real <= 2 * 22);
+    }
+
+    /**
+     * Con la latencia real de un hilo (despierta cuando vence la espera o llega un bloque, más
+     * unos ms), el corte se declara con ~1 bloque real todavía en la salida: el silencio entra a
+     * tiempo y AudioFlinger no queda sin datos.
+     */
+    @Test
+    public void corteConLatenciaDelHiloSinFaltas() {
+        nuevo(new SalidaFalsa(C, 1024, 0, 0));
+        arrancarEstereo();
+        long despertar = 0;
+        for (int i = 0; i < 4000; i++) {
+            salida.avanzar(MS);
+            t += MS;
+            if (t >= despertar) {
+                long espera = 0;
+                for (int k = 0; k < 1000 && espera == 0; k++) {
+                    espera = r.paso(t);
+                }
+                despertar = t + (espera + 8) * MS; // 8 ms de demora del planificador
+            }
+        }
+        assertEquals(1, r.cortes());
+        assertEquals("el silencio llegó antes de que la salida se vaciara", 0, salida.faltas);
+    }
+
+    @Test
+    public void bufferMsCuentaLaColaAunqueLaSalidaNoAbra() {
+        salida.fallarAbrir = true;
+        cola.nuevaGeneracion(ESTEREO);
+        encolar(ESTEREO, 10, 1000);
+        correr(10);
+        assertEquals(Reproductor.SIN_CONFIG, r.estado());
+        assertEquals(ESTEREO.msParaBloques(10), r.bufferMs());
+    }
 }

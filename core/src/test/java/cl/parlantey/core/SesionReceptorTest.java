@@ -156,7 +156,12 @@ public class SesionReceptorTest {
     public void pingRespondePongYStateLlegaDesdeElHello() throws IOException {
         emisor.ping(1234);
         procesar(1);
-        assertTrue(sesion.tickEstado(System.nanoTime())); // el primero sale enseguida
+        // El primer STATE espera a que el hilo de audio ponga las métricas en cero (cortes de
+        // la conexión anterior): sin un paso del reproductor, todavía no sale.
+        assertTrue(sesion.tickEstado(System.nanoTime()));
+        assertTrue(!respuestas().contains(Protocolo.STATE));
+        reproductor.paso(System.nanoTime());
+        assertTrue(sesion.tickEstado(System.nanoTime())); // ahora sale enseguida
         java.util.List<Integer> r = respuestas();
         assertEquals(Integer.valueOf(Protocolo.HELLO), r.get(0));
         assertTrue(r.contains(Protocolo.PONG));
@@ -193,5 +198,51 @@ public class SesionReceptorTest {
         sesion.terminar();
         assertNull(cola.config());
         assertEquals(0, cola.enCola());
+    }
+
+    /** Mono con 2050 muestras: cabe en 1032 bytes, pero no en el bloque decodificado (2048). */
+    @Test
+    public void configQueNoCabeAlDecodificarSeRechaza() throws IOException {
+        entrada.write(new byte[] {0x50, 0x59, 0x02, 0x00, 0, 0, 0, 12, 1, 0, 0, (byte) 0xAC, 0x44, 1, 0x08, 0x02,
+            0, 0, 7, (byte) 0xD0});
+        try {
+            procesar(1);
+            fail("debió rechazar el CONFIG");
+        } catch (ProtocoloException esperada) {
+            assertTrue(esperada.getMessage().contains("2050"));
+        }
+        assertNull(cola.config());
+    }
+
+    /**
+     * La pausa, ultimoSeq y los cortes son de la conexión: la siguiente (misma cola y mismo
+     * reproductor, como en el servicio) empieza sin pausa y con ultimoSeq = SEQ_NINGUNO.
+     */
+    @Test
+    public void unaConexionNuevaNoHeredaPausaNiSeq() throws IOException {
+        emisor.config(ESTEREO);
+        audio(ESTEREO, 41);
+        emisor.control(Protocolo.CONTROL_PAUSA);
+        procesar(3);
+        assertTrue(reproductor.pausado());
+        assertEquals(41, cola.ultimoSeq());
+        sesion.terminar();
+        assertFalse("terminar quita la pausa", reproductor.pausado());
+
+        reproductor.pedirPausa(true); // aunque quedara puesta por cualquier motivo
+        entrada.reset();
+        sesion = null;
+        procesar(0); // conexión nueva: iniciar()
+        assertFalse(reproductor.pausado());
+        assertEquals(Protocolo.SEQ_NINGUNO, cola.ultimoSeq());
+    }
+
+    @Test
+    public void detenerQuitaLaPausa() throws IOException {
+        emisor.config(ESTEREO);
+        emisor.control(Protocolo.CONTROL_PAUSA);
+        emisor.control(Protocolo.CONTROL_DETENER);
+        procesar(3);
+        assertFalse(reproductor.pausado());
     }
 }
