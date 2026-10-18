@@ -51,6 +51,7 @@ import cl.parlantey.emisor.Medicion
 import cl.parlantey.emisor.Modo
 import cl.parlantey.emisor.OpcionPreset
 import cl.parlantey.emisor.Reproduccion
+import cl.parlantey.emisor.ResumenCaptura
 import cl.parlantey.emisor.ResumenMusica
 import cl.parlantey.emisor.ResumenTono
 import cl.parlantey.emisor.UiEstado
@@ -82,6 +83,9 @@ data class Acciones(
     val anterior: () -> Unit,
     val copiarMusica: () -> Unit,
     val borrarMusica: () -> Unit,
+    val iniciarCaptura: () -> Unit,
+    val copiarCapturas: () -> Unit,
+    val borrarCapturas: () -> Unit,
     val copiarMediciones: () -> Unit,
     val borrarMediciones: () -> Unit,
     val copiarPruebasTono: () -> Unit,
@@ -121,11 +125,18 @@ fun Pantalla(ui: UiEstado, acciones: Acciones) {
             }
             if (local.btDisponible && local.permisoOk) {
                 musica(ui, enlace is Enlace.Conectado, acciones)
+                if (enlace is Enlace.Conectado || r?.modo == Modo.CAPTURA) {
+                    item { TarjetaCaptura(r, local, enlace is Enlace.Conectado, acciones) }
+                }
                 if (enlace is Enlace.Conectado) {
                     item { Text("Pruebas", style = MaterialTheme.typography.titleMedium) }
                     item { TarjetaConectado(enlace, r, local.wifi, acciones) }
                     item { TarjetaTono(enlace, r, local, servicio.ultimoKBps, acciones) }
                 }
+            }
+            if (servicio.capturas.isNotEmpty()) {
+                item { Cabecera("Capturas de todo el audio", "Copiar para NOTAS (Fase 4)", acciones.copiarCapturas, acciones.borrarCapturas) }
+                items(servicio.capturas.asReversed()) { TarjetaResumenCaptura(it) }
             }
             if (servicio.musica.isNotEmpty()) {
                 item { Cabecera("Sesiones de música", "Copiar para NOTAS (Fase 3)", acciones.copiarMusica, acciones.borrarMusica) }
@@ -234,6 +245,7 @@ private fun TarjetaEnlace(enlace: Enlace, r: Reproduccion?, local: Local, kBps: 
     val sigue = when (r?.modo) {
         Modo.TONO -> "El tono sigue al reconectar."
         Modo.MUSICA -> "La música sigue al reconectar, desde donde iba."
+        Modo.CAPTURA -> "Todo el audio se vuelve a enviar al reconectar."
         null -> null
     }
     when (enlace) {
@@ -499,6 +511,79 @@ private fun FilaCancion(i: Int, c: Cancion, actual: Boolean, conectado: Boolean,
             },
         )
     }
+}
+
+/** Modo «Todo el audio»: lo que suena en este teléfono, en vivo. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TarjetaCaptura(r0: Reproduccion?, local: Local, conectado: Boolean, acciones: Acciones) = Tarjeta {
+    val r = r0?.takeIf { it.modo == Modo.CAPTURA }
+    Text("Todo el audio", style = MaterialTheme.typography.titleMedium)
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+        Text("Necesita Android 10 o superior en este teléfono.")
+        return@Tarjeta
+    }
+    if (r == null) {
+        Text("Envía al Galaxy Y lo que suena en este teléfono (YouTube, Spotify, juegos…).")
+        Button(onClick = acciones.iniciarCaptura, enabled = conectado, modifier = Modifier.fillMaxWidth()) {
+            Text(if (r0 != null) "Enviar todo el audio (detiene lo que suena)" else "Enviar todo el audio")
+        }
+        Text(
+            "Android pide permiso para grabar audio y para «compartir pantalla»: elige «Pantalla completa». " +
+                "Solo se envía el audio.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    } else {
+        Text(
+            "Enviando · ${r.preset.nombre}${if (r.opcion == OpcionPreset.AUTO) " (Auto)" else ""}" +
+                if (r.tasaSalida > 0) " · ${tasaTexto(r.tasaSalida)} kHz ${if (r.canales == 2) "estéreo" else "mono"}" else "",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text("Latencia ≈ ${r.latenciaMs} ms", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        EnVivoTexto(r)
+        if (r.descartadosMs > 0) {
+            Text("Se descartaron ${r.descartadosMs} ms porque el enlace se atrasó.", style = MaterialTheme.typography.bodySmall)
+        }
+        if (r.silencio) {
+            Text(
+                "Llega solo silencio. Si algo está sonando, esa app no permite la captura.",
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Text("Preset", style = MaterialTheme.typography.bodyMedium)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (o in OpcionPreset.entries) {
+                FilterChip(selected = local.opcion == o, onClick = { acciones.elegirPreset(o) }, label = { Text(o.etiqueta) })
+            }
+        }
+        Button(onClick = acciones.detenerAudio, modifier = Modifier.fillMaxWidth()) { Text("Dejar de enviar") }
+    }
+    Text(
+        "La latencia (≈ 1 s) sirve para música, no para video. Algunas apps no permiten la captura y llega " +
+            "silencio. Este teléfono también suena: bajarle el volumen puede bajar la captura según el fabricante.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+@Composable
+private fun TarjetaResumenCaptura(r: ResumenCaptura) = Tarjeta {
+    val dur = (r.hastaMs - r.desdeMs) / 1000
+    Text(
+        "${r.inicio} · ${"%d:%02d:%02d".format(dur / 3600, dur / 60 % 60, dur % 60)}${if (r.terminado) "" else " (en curso)"}",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Text(
+        "${r.cortes} cortes",
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Bold,
+        color = if (r.cortes == 0L) Color.Unspecified else MaterialTheme.colorScheme.error,
+    )
+    Text("Preset ${r.presets.joinToString(", ")}${if (r.opcion == OpcionPreset.AUTO) " (Auto)" else ""} · ${r.formato}")
+    if (r.muestras > 0) {
+        Text("Latencia ≈ mín/prom/máx ${r.latenciaMinMs}/${r.latenciaPromMs}/${r.latenciaMaxMs} ms")
+        Text("Buffer mín/prom/máx ${r.bufferMinMs}/${r.bufferPromMs}/${r.bufferMaxMs} ms")
+    }
+    Text("Descartado por atraso: ${r.descartadosMs} ms · reconexiones: ${r.reconexiones}")
 }
 
 @Composable

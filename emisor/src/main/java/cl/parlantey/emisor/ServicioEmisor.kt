@@ -1,6 +1,8 @@
 package cl.parlantey.emisor
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,7 +14,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -22,6 +27,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
+import cl.parlantey.core.ColaCaptura
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,6 +51,9 @@ class ServicioEmisor : Service() {
     private var enPrimerPlano = false
     private lateinit var wakeLock: PowerManager.WakeLock
     private var renovando = false
+    // Captura de todo el audio (Android 10+); solo el hilo principal.
+    private var proyeccion: MediaProjection? = null
+    private var captura: Captura? = null
 
     private val renovarWakeLock = object : Runnable {
         override fun run() {
@@ -134,6 +144,7 @@ class ServicioEmisor : Service() {
                 Comando.CambiarPreset(OpcionPreset.valueOf(intent.getStringExtra(EXTRA_PRESET) ?: OpcionPreset.AUTO.name)),
             )
             ACCION_COLA -> supervisor?.comando(Comando.ColaCambiada)
+            ACCION_CAPTURA -> iniciarCaptura(intent!!)
             ACCION_PROBAR -> supervisor?.comando(
                 Comando.Probar(WifiGalaxy.valueOf(intent.getStringExtra(EXTRA_WIFI) ?: WifiGalaxy.SIN_DATO.name)),
             )
@@ -172,7 +183,12 @@ class ServicioEmisor : Service() {
         val d = Dispositivo(intent.getStringExtra(EXTRA_NOMBRE) ?: direccion, direccion)
         EstadoEmisor.actualizar { it.copy(error = null, aviso = null) }
         getSystemService(NotificationManager::class.java).cancel(ID_FIN)
-        val s = Supervisor(applicationContext, adaptador, d) { principal.post(::alTerminarSupervisor) }
+        val s = Supervisor(
+            applicationContext,
+            adaptador,
+            d,
+            alTerminarCaptura = { cola -> principal.post { terminoCaptura(cola) } },
+        ) { principal.post(::alTerminarSupervisor) }
         supervisor = s
         actualizarWakeLock(true)
         s.iniciar()
@@ -191,7 +207,110 @@ class ServicioEmisor : Service() {
         }
     }
 
+    // --- Captura de todo el audio.
+
+    /**
+     * Orden de Android 14+: el consentimiento ya se dio en la Activity ([intent] trae su resultado);
+     * ahora el servicio pasa a tipo mediaProjection y recién entonces crea la proyección y la captura.
+     */
+    private fun iniciarCaptura(intent: Intent) {
+        val s = supervisor ?: return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val datos = IntentCompat.getParcelableExtra(intent, EXTRA_DATOS, Intent::class.java)
+        val resultado = intent.getIntExtra(EXTRA_RESULTADO, Activity.RESULT_CANCELED)
+        val opcion = OpcionPreset.valueOf(intent.getStringExtra(EXTRA_PRESET) ?: OpcionPreset.AUTO.name)
+        if (datos == null || resultado != Activity.RESULT_OK) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            avisar("Falta el permiso de grabar audio para enviar todo el audio.")
+            return
+        }
+        detenerCaptura() // si había otra
+        try {
+            ServiceCompat.startForeground(
+                this,
+                ID_NOTIFICACION,
+                notificacion(textoNotificacion(EstadoEmisor.estado.value)),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+            )
+        } catch (e: Exception) {
+            Log.e(Supervisor.TAG, "startForeground mediaProjection", e)
+            avisar("Android no dejó empezar la captura: ${e.message}")
+            return
+        }
+        val p = try {
+            getSystemService(MediaProjectionManager::class.java).getMediaProjection(resultado, datos)
+        } catch (e: Exception) {
+            Log.e(Supervisor.TAG, "getMediaProjection", e)
+            null
+        }
+        if (p == null) {
+            soloConexion()
+            avisar("No se pudo empezar la captura (vuelve a intentarlo).")
+            return
+        }
+        p.registerCallback(
+            object : MediaProjection.Callback() {
+                override fun onStop() {
+                    // «Dejar de compartir» desde el sistema (o se llamó a stop()).
+                    if (proyeccion === p) {
+                        supervisor?.comando(Comando.DetenerAudio)
+                        detenerCaptura()
+                    }
+                }
+            },
+            principal,
+        )
+        val c = try {
+            Captura(p)
+        } catch (e: Exception) {
+            Log.e(Supervisor.TAG, "AudioRecord de captura", e)
+            null
+        }
+        if (c == null || !c.iniciar()) {
+            p.stop()
+            soloConexion()
+            avisar("No se pudo capturar el audio: ${c?.error ?: "el teléfono no lo permite"}.")
+            return
+        }
+        proyeccion = p
+        captura = c
+        s.comando(Comando.IniciarCaptura(c.cola, opcion))
+    }
+
+    /** El supervisor dejó de enviar la captura de [cola]: soltarla si todavía es la actual. */
+    private fun terminoCaptura(cola: ColaCaptura) {
+        if (captura?.cola === cola) detenerCaptura()
+    }
+
+    private fun detenerCaptura() {
+        val c = captura
+        val p = proyeccion
+        captura = null
+        proyeccion = null
+        c?.detener()
+        p?.stop()
+        if (p != null) soloConexion()
+    }
+
+    /** Vuelve a ser solo connectedDevice (sin la captura). */
+    private fun soloConexion() {
+        if (!enPrimerPlano || supervisor == null) return
+        try {
+            ServiceCompat.startForeground(
+                this,
+                ID_NOTIFICACION,
+                notificacion(textoNotificacion(EstadoEmisor.estado.value)),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0,
+            )
+        } catch (e: Exception) {
+            Log.w(Supervisor.TAG, "startForeground connectedDevice", e)
+        }
+    }
+
+    private fun avisar(mensaje: String) = EstadoEmisor.actualizar { it.copy(aviso = mensaje) }
+
     private fun alTerminarSupervisor() {
+        detenerCaptura()
         supervisor = null
         actualizarWakeLock(false)
         avisarFin()
@@ -234,6 +353,7 @@ class ServicioEmisor : Service() {
     }
 
     override fun onDestroy() {
+        detenerCaptura()
         supervisor?.detener()
         supervisor = null
         actualizarWakeLock(false)
@@ -245,34 +365,44 @@ class ServicioEmisor : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     /** Lo que muestra la notificación (cambia solo en las transiciones, no con la posición). */
-    private data class TextoNotificacion(val titulo: String, val texto: String, val musica: Boolean, val pausado: Boolean)
+    private data class TextoNotificacion(
+        val titulo: String,
+        val texto: String,
+        val musica: Boolean,
+        val pausado: Boolean,
+        val enVivo: Boolean,
+    )
 
     private fun textoNotificacion(e: EstadoServicio): TextoNotificacion {
         val r = e.reproduccion
         val musica = r?.modo == Modo.MUSICA
+        val enVivo = r?.modo == Modo.CAPTURA
         val pausado = r?.pausado == true
         val sonando = when {
             r == null -> null
             r.modo == Modo.TONO -> "Tono 440 Hz · ${r.preset.nombre}"
+            r.modo == Modo.CAPTURA -> "Enviando todo el audio · ${r.preset.nombre}"
             else -> listOf(r.artista, if (pausado) "en pausa" else "", r.preset.nombre).filter { it.isNotEmpty() }
                 .joinToString(" · ")
         }
         val titulo = r?.takeIf { musica }?.titulo?.ifEmpty { null }
         return when (val enlace = e.enlace) {
-            Enlace.Inactivo -> TextoNotificacion("ParlanteY", "Iniciando…", false, false)
+            Enlace.Inactivo -> TextoNotificacion("ParlanteY", "Iniciando…", false, false, false)
             is Enlace.Conectando ->
-                TextoNotificacion("Conectando con ${enlace.dispositivo.nombre}…", sonando ?: "", musica, pausado)
+                TextoNotificacion("Conectando con ${enlace.dispositivo.nombre}…", sonando ?: "", musica, pausado, enVivo)
             is Enlace.Conectado -> TextoNotificacion(
                 titulo ?: "Conectado a ${enlace.dispositivo.nombre}",
                 sonando ?: "Listo para enviar audio",
                 musica,
                 pausado,
+                enVivo,
             )
             is Enlace.Reconectando -> TextoNotificacion(
                 "Reconectando con ${enlace.dispositivo.nombre} (intento ${enlace.intento})", enlace.causa, musica, pausado,
+                enVivo,
             )
             is Enlace.BluetoothApagado ->
-                TextoNotificacion("Bluetooth apagado", "Se reconecta solo al encenderlo", musica, pausado)
+                TextoNotificacion("Bluetooth apagado", "Se reconecta solo al encenderlo", musica, pausado, enVivo)
         }
     }
 
@@ -300,6 +430,7 @@ class ServicioEmisor : Service() {
             b.addAction(0, if (t.pausado) "Reanudar" else "Pausa", accion(3, ACCION_PAUSA))
             b.addAction(0, "Siguiente", accion(4, ACCION_SIGUIENTE))
         }
+        if (t.enVivo) b.addAction(0, "Dejar de enviar", accion(5, ACCION_DETENER_AUDIO))
         return b.addAction(0, "Detener", accion(1, ACCION_DETENER))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -321,6 +452,9 @@ class ServicioEmisor : Service() {
         const val ACCION_PRESET = "cl.parlantey.emisor.PRESET"
         const val ACCION_COLA = "cl.parlantey.emisor.COLA"
         const val EXTRA_INDICE = "indice"
+        const val ACCION_CAPTURA = "cl.parlantey.emisor.CAPTURA"
+        const val EXTRA_RESULTADO = "resultado"
+        const val EXTRA_DATOS = "datos"
         const val ACCION_PROBAR = "cl.parlantey.emisor.PROBAR"
         const val EXTRA_NOMBRE = "nombre"
         const val EXTRA_DIRECCION = "direccion"

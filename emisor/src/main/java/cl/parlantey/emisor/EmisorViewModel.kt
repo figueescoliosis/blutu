@@ -151,7 +151,8 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
     /** Con música sonando, el preset nuevo se aplica ya (sigue desde el mismo punto). */
     fun elegirPreset(o: OpcionPreset) {
         local.update { it.copy(opcion = o) }
-        if (EstadoEmisor.estado.value.reproduccion?.modo == Modo.MUSICA) {
+        val modo = EstadoEmisor.estado.value.reproduccion?.modo
+        if (modo == Modo.MUSICA || modo == Modo.CAPTURA) {
             enviar(intent(ServicioEmisor.ACCION_PRESET).putExtra(ServicioEmisor.EXTRA_PRESET, o.name))
         }
     }
@@ -165,6 +166,22 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
     fun borrarPruebasTono() = EstadoEmisor.actualizar { e ->
         e.copy(pruebasTono = e.pruebasTono.filter { !it.terminado })
     }
+
+    fun borrarCapturas() = EstadoEmisor.actualizar { e -> e.copy(capturas = e.capturas.filter { !it.terminado }) }
+
+    // --- Todo el audio.
+
+    fun tienePermisoAudio(): Boolean =
+        getApplication<Application>().checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** Con el consentimiento de MediaProjection ya dado: el servicio crea la proyección y captura. */
+    fun iniciarCaptura(resultado: Int, datos: Intent) = enviar(
+        intent(ServicioEmisor.ACCION_CAPTURA)
+            .putExtra(ServicioEmisor.EXTRA_RESULTADO, resultado)
+            .putExtra(ServicioEmisor.EXTRA_DATOS, datos)
+            .putExtra(ServicioEmisor.EXTRA_PRESET, local.value.opcion.name),
+    )
 
     fun borrarMusica() = EstadoEmisor.actualizar { e -> e.copy(musica = e.musica.filter { !it.terminado }) }
 
@@ -239,6 +256,28 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
                     "${if (r.errores > 0) " (${r.errores} sin abrir)" else ""} | ${r.tipos.joinToString(", ").ifEmpty { "—" }} | " +
                     "$presets | ${r.formatos.joinToString(", ").ifEmpty { "—" }} | ${r.cortes} | $buffer | ${r.reconexiones} | " +
                     "${latencias(r.pausasMs)} | ${latencias(r.siguientesMs)} | $completa |",
+            )
+        }
+    }
+
+    /** Capturas de todo el audio (Fase 4) en formato de tabla Markdown. */
+    fun textoNotasFase4(): String = buildString {
+        appendLine(cabecera())
+        appendLine()
+        appendLine(
+            "| Inicio | Duración | Preset | Formato | Cortes | Latencia ≈ mín/prom/máx (ms) | " +
+                "Buffer mín/prom/máx (ms) | Descartado (ms) | Reconexiones |",
+        )
+        appendLine("|---|---|---|---|---|---|---|---|---|")
+        for (r in EstadoEmisor.estado.value.capturas) {
+            val dur = (r.hastaMs - r.desdeMs) / 1000
+            val presets = r.presets.joinToString(", ").ifEmpty { "—" } + if (r.opcion == OpcionPreset.AUTO) " (Auto)" else ""
+            val lat = if (r.muestras == 0L) "—" else "${r.latenciaMinMs}/${r.latenciaPromMs}/${r.latenciaMaxMs}"
+            val buf = if (r.muestras == 0L) "—" else "${r.bufferMinMs}/${r.bufferPromMs}/${r.bufferMaxMs}"
+            appendLine(
+                "| ${r.inicio} | ${"%d:%02d:%02d".format(dur / 3600, dur / 60 % 60, dur % 60)}" +
+                    "${if (r.terminado) "" else " (en curso)"} | $presets | ${r.formato.ifEmpty { "—" }} | ${r.cortes} | " +
+                    "$lat | $buf | ${r.descartadosMs} | ${r.reconexiones} |",
             )
         }
     }

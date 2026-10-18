@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionConfig
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -35,6 +37,22 @@ class MainActivity : ComponentActivity() {
 
     private val pedirEncender =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.refrescar() }
+
+    /** Consentimiento de MediaProjection: con él, el servicio captura todo el audio. */
+    private val pedirProyeccion =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+            val datos = r.data
+            if (r.resultCode == RESULT_OK && datos != null) vm.iniciarCaptura(r.resultCode, datos)
+        }
+
+    private val pedirAudio =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { concedido ->
+            if (concedido) {
+                pedirConsentimiento()
+            } else {
+                Toast.makeText(this, "Sin el permiso de grabar audio no se puede enviar todo el audio", Toast.LENGTH_LONG).show()
+            }
+        }
 
     /** Selector de documentos con varios a la vez; el permiso de lectura se hace persistente. */
     private val elegirCanciones =
@@ -70,6 +88,9 @@ class MainActivity : ComponentActivity() {
             anterior = vm::anterior,
             copiarMusica = { copiar(vm.textoNotasFase3()) },
             borrarMusica = vm::borrarMusica,
+            iniciarCaptura = ::empezarCaptura,
+            copiarCapturas = { copiar(vm.textoNotasFase4()) },
+            borrarCapturas = vm::borrarCapturas,
             copiarMediciones = { copiar(vm.textoParaNotas()) },
             borrarMediciones = vm::borrarMediciones,
             copiarPruebasTono = { copiar(vm.textoNotasFase2()) },
@@ -132,6 +153,23 @@ class MainActivity : ComponentActivity() {
 
     private fun abrirAjustesApp() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+    }
+
+    /** Permiso de grabar audio → consentimiento de MediaProjection → el servicio. */
+    private fun empezarCaptura() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (vm.tienePermisoAudio()) pedirConsentimiento() else pedirAudio.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun pedirConsentimiento() {
+        val mpm = getSystemService(MediaProjectionManager::class.java)
+        // Android 14+: pedir la pantalla completa (con una sola app, la captura de audio queda limitada a ella).
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+        } else {
+            mpm.createScreenCaptureIntent()
+        }
+        pedirProyeccion.launch(intent)
     }
 
     private companion object {

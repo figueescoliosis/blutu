@@ -6,6 +6,7 @@ import android.os.SystemClock
 import android.util.Log
 import cl.parlantey.core.ByeRecibidoException
 import cl.parlantey.core.CodificadorPista
+import cl.parlantey.core.ColaCaptura
 import cl.parlantey.core.ControlCola
 import cl.parlantey.core.Estado
 import cl.parlantey.core.FlujoEmisor
@@ -50,6 +51,9 @@ sealed interface Comando {
 
     /** Se agregaron canciones (o se vació la cola). */
     data object ColaCambiada : Comando
+
+    /** Enviar en vivo lo que captura [cola] (la captura ya empezó en el servicio). */
+    data class IniciarCaptura(val cola: ColaCaptura, val opcion: OpcionPreset) : Comando
 }
 
 /**
@@ -77,6 +81,11 @@ class Supervisor(
     private val contexto: Context,
     private val adaptador: BluetoothAdapter,
     private val dispositivo: Dispositivo,
+    /**
+     * Terminó el envío de la captura de esta cola (por lo que sea): el servicio la suelta, si sigue
+     * siendo la suya (pudo empezar otra). Se llama desde el hilo de enlace.
+     */
+    private val alTerminarCaptura: (ColaCaptura) -> Unit,
     private val alTerminar: () -> Unit,
 ) {
     private val hiloEnlace = Thread(::ejecutar, "ParlanteY-enlace")
@@ -105,6 +114,10 @@ class Supervisor(
     private var canciones: List<Cancion> = emptyList()
     private var resumenTono: ResumenTono? = null
     private var resumenMusica: ResumenMusica? = null
+    private var resumenCaptura: ResumenCaptura? = null
+    private var colaCaptura: ColaCaptura? = null
+    /** elapsedRealtime desde que la captura entrega solo silencio (0 = hay señal). */
+    private var silencioDesde = 0L
     private var probadoAuto = false
     /** cortes de las conexiones anteriores de lo que suena. */
     private var cortesPrevios = 0L
@@ -298,6 +311,7 @@ class Supervisor(
             s.setAudioActivo(true)
             resumenTono = resumenTono?.let { it.copy(reconexiones = it.reconexiones + 1) }
             resumenMusica = resumenMusica?.let { it.copy(reconexiones = it.reconexiones + 1) }
+            resumenCaptura = resumenCaptura?.let { it.copy(reconexiones = it.reconexiones + 1) }
         }
         val kBpsGuardados = EstadoEmisor.estado.value.kBps(dispositivo.direccion)
         if (!probadoAuto && modo == null && kBpsGuardados.isNaN()) {
@@ -388,9 +402,10 @@ class Supervisor(
             }
             is Comando.CambiarPreset -> {
                 opcion = c.opcion
-                if (modo == Modo.MUSICA) control.cambiarPreset(opcion.resolver(kBps()))
+                if (modo == Modo.MUSICA || modo == Modo.CAPTURA) control.cambiarPreset(opcion.resolver(kBps()))
             }
             Comando.ColaCambiada -> colaCambiada(s)
+            is Comando.IniciarCaptura -> iniciarCaptura(s, c)
         }
         if (modo != null) publicarReproduccion(null)
         return enlace
@@ -422,6 +437,7 @@ class Supervisor(
         val preset = c.opcion.resolver(kBps())
         opcion = c.opcion
         tasaTono = c.tasa
+        control.modo(false, FlujoEmisor.OBJETIVO_ARCHIVOS_MS)
         control.cola(FabricaTono(c.tasa))
         control.preset(preset)
         control.reproducir(0, 0)
@@ -445,8 +461,9 @@ class Supervisor(
     private fun reproducir(s: SesionEmisor, c: Comando.Reproducir) {
         val lista = ColaMusica.canciones.value
         if (c.indice !in lista.indices) return
-        if (modo == Modo.TONO) detenerAudio(s)
+        if (modo == Modo.TONO || modo == Modo.CAPTURA) detenerAudio(s)
         opcion = c.opcion
+        control.modo(false, FlujoEmisor.OBJETIVO_ARCHIVOS_MS)
         if (modo != Modo.MUSICA || lista != canciones) control.cola(FabricaArchivos(contexto, lista, ejecutor))
         canciones = lista
         control.preset(opcion.resolver(kBps()))
@@ -463,6 +480,23 @@ class Supervisor(
         Log.i(TAG, "música: canción ${c.indice + 1} de ${lista.size}, ${control.preset()}")
     }
 
+    private fun iniciarCaptura(s: SesionEmisor, c: Comando.IniciarCaptura) {
+        if (modo != null) detenerAudio(s) // también una captura anterior (y su proyección)
+        opcion = c.opcion
+        colaCaptura = c.cola
+        silencioDesde = 0
+        control.modo(true, FlujoEmisor.OBJETIVO_EN_VIVO_MS)
+        control.cola(FabricaCaptura(c.cola))
+        control.preset(opcion.resolver(kBps()))
+        control.reproducir(0, 0)
+        empezarAudio(s, Modo.CAPTURA)
+        val ahora = SystemClock.elapsedRealtime()
+        val r = ResumenCaptura(LocalDateTime.now().format(FORMATO_HORA), ahora, ahora, opcion)
+        resumenCaptura = r
+        publicar { it.copy(capturas = it.capturas + r) }
+        Log.i(TAG, "captura: ${control.preset()}")
+    }
+
     /** Agregar al final no corta nada; cualquier otro cambio (vaciar) detiene la música. */
     private fun colaCambiada(s: SesionEmisor) {
         val lista = ColaMusica.canciones.value
@@ -476,7 +510,7 @@ class Supervisor(
     }
 
     private fun pausar() {
-        if (modo == null || control.pausado()) return
+        if (modo == null || modo == Modo.CAPTURA || control.pausado()) return
         control.pausar()
         // Solo se mide si estaba sonando: si no, cualquier STATE "sin sonar" la confirmaría.
         pausaDesde = if (ultimoReproduciendo && !control.abriendo()) SystemClock.elapsedRealtime() else 0
@@ -541,10 +575,40 @@ class Supervisor(
             }
             resumenTono = r
             if (r != null) publicar { it.copy(pruebasTono = it.pruebasTono.dropLast(1) + r) }
-        } else {
+        } else if (m == Modo.MUSICA) {
             val r = resumenMusica?.let { actualizarResumen(it, e, ahora, vivo.cortes) }
             resumenMusica = r
             if (r != null) publicar { it.copy(musica = it.musica.dropLast(1) + r) }
+        } else {
+            val cola = colaCaptura
+            if (cola != null) {
+                if (cola.picoYReiniciar() > UMBRAL_SILENCIO) {
+                    silencioDesde = 0
+                } else if (silencioDesde == 0L) {
+                    silencioDesde = ahora
+                }
+            }
+            val latencia = vivo.nivelMs + (cola?.msPendientes() ?: 0)
+            val cfg = control.flujo().config()
+            val r = resumenCaptura?.let { r ->
+                val suena = e.reproduciendo
+                r.copy(
+                    hastaMs = ahora,
+                    cortes = vivo.cortes,
+                    presets = (r.presets + control.preset().nombre).distinct(),
+                    formato = cfg?.let { "${tasaTexto(it.sampleRate)} kHz ${if (it.canales == 2) "estéreo" else "mono"}" } ?: r.formato,
+                    bufferMinMs = if (suena) minOf(r.bufferMinMs, e.bufferMs) else r.bufferMinMs,
+                    bufferMaxMs = if (suena) maxOf(r.bufferMaxMs, e.bufferMs) else r.bufferMaxMs,
+                    bufferSumaMs = r.bufferSumaMs + if (suena) e.bufferMs else 0,
+                    latenciaMinMs = if (suena) minOf(r.latenciaMinMs, latencia) else r.latenciaMinMs,
+                    latenciaMaxMs = if (suena) maxOf(r.latenciaMaxMs, latencia) else r.latenciaMaxMs,
+                    latenciaSumaMs = r.latenciaSumaMs + if (suena) latencia else 0,
+                    muestras = r.muestras + if (suena) 1 else 0,
+                    descartadosMs = cola?.msDescartados() ?: r.descartadosMs,
+                )
+            }
+            resumenCaptura = r
+            if (r != null) publicar { it.copy(capturas = it.capturas.dropLast(1) + r) }
         }
         publicarReproduccion(vivo)
     }
@@ -602,6 +666,8 @@ class Supervisor(
         val i = control.indiceSonando()
         val cfg = control.flujo().config()
         val cancion = if (m == Modo.MUSICA) canciones.getOrNull(i) else null
+        val cola = colaCaptura.takeIf { m == Modo.CAPTURA }
+        val silencio = silencioDesde != 0L && SystemClock.elapsedRealtime() - silencioDesde >= AVISO_SILENCIO_MS
         publicar { est ->
             val r = Reproduccion(
                 modo = m,
@@ -609,7 +675,11 @@ class Supervisor(
                 preset = control.preset(),
                 tasaOrigen = tasaTono,
                 indice = i,
-                titulo = cancion?.titulo ?: if (m == Modo.TONO) FabricaTono.TRACK.titulo else "",
+                titulo = cancion?.titulo ?: when (m) {
+                    Modo.TONO -> FabricaTono.TRACK.titulo
+                    Modo.CAPTURA -> FabricaCaptura.TRACK.titulo
+                    Modo.MUSICA -> ""
+                },
                 artista = cancion?.artista ?: if (m == Modo.TONO) FabricaTono.TRACK.artista else "",
                 posicionMs = control.posicionMs(),
                 duracionMs = cancion?.duracionMs ?: 0,
@@ -619,6 +689,9 @@ class Supervisor(
                 canales = cfg?.canales ?: 0,
                 vivo = vivo ?: est.reproduccion?.vivo,
                 error = control.ultimoError(),
+                latenciaMs = if (cola != null) (vivo ?: est.reproduccion?.vivo)?.nivelMs?.plus(cola.msPendientes()) ?: 0 else 0,
+                descartadosMs = cola?.msDescartados() ?: 0,
+                silencio = cola != null && silencio,
             )
             est.copy(reproduccion = r)
         }
@@ -626,20 +699,26 @@ class Supervisor(
 
     /** Termina lo que sonaba: cierra los resúmenes y lo quita de la UI. */
     private fun finAudio(s: SesionEmisor?, completa: Boolean) {
+        val terminada = colaCaptura.takeIf { modo == Modo.CAPTURA }
         modo = null
         s?.setAudioActivo(false)
         val ahora = SystemClock.elapsedRealtime()
         val rt = resumenTono?.copy(terminado = true, hastaMs = ahora)
         val rm = resumenMusica?.copy(terminado = true, hastaMs = ahora, completa = completa, errores = control.errores().toInt())
+        val rc = resumenCaptura?.copy(terminado = true, hastaMs = ahora)
         resumenTono = null
         resumenMusica = null
+        resumenCaptura = null
+        colaCaptura = null
         publicar { est ->
             est.copy(
                 reproduccion = null,
                 pruebasTono = if (rt == null) est.pruebasTono else est.pruebasTono.dropLast(1) + rt,
                 musica = if (rm == null) est.musica else est.musica.dropLast(1) + rm,
+                capturas = if (rc == null) est.capturas else est.capturas.dropLast(1) + rc,
             )
         }
+        if (terminada != null) alTerminarCaptura(terminada)
     }
 
     /** Fin pedido por el usuario: DETENER si hay audio, BYE(0) y cierre (el vigía corta a los 2 s). */
@@ -743,6 +822,9 @@ class Supervisor(
         private const val ESPERA_INACTIVO_MS = 250L
         private const val ESPERA_ABRIENDO_MS = 10L
         private const val LIMITE_MEDICION_MS = 10_000L
+        /** |muestra| bajo esto cuenta como silencio (ruido de redondeo). */
+        private const val UMBRAL_SILENCIO = 16
+        private const val AVISO_SILENCIO_MS = 3000L
         private const val MAX_ESPERA_MS = 10_000L
         private const val MAX_RECONEXION_MS = 5 * 60_000L
         private const val ESPERA_TRAS_ENCENDER_MS = 1_000L

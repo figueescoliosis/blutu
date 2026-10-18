@@ -63,6 +63,7 @@ public class MainActivity extends Activity {
     private int vEstadoReproductor = -1;
     private boolean vReproduciendo;
     private boolean vFinalizado;
+    private long vDeriva;
     private Track vTrack;
     private long vBufferMs = -1;
     private int vCortes = -1;
@@ -220,10 +221,17 @@ public class MainActivity extends Activity {
 
         Config c = r.config();
         long decod = r.decodPromedioUs();
-        if (c != vConfig || decod / 100 != vDecodUs / 100) {
+        long deriva = r.framesDuplicados() - r.framesDescartados() - r.bloquesDescartados() * 1024;
+        if (c != vConfig || decod / 100 != vDecodUs / 100 || deriva != vDeriva) {
             vConfig = c;
             vDecodUs = decod;
-            formato.setText(c == null ? getString(R.string.formato_ninguno) : textoFormato(c, decod));
+            vDeriva = deriva;
+            String texto = c == null ? getString(R.string.formato_ninguno) : textoFormato(c, decod);
+            if (c != null && c.enVivo) {
+                // En vivo: frames que la compensación de deriva agregó (+) o quitó (−).
+                texto = texto + " · " + getString(R.string.en_vivo) + " " + (deriva > 0 ? "+" : "") + deriva;
+            }
+            formato.setText(texto);
         }
 
         String delServicio = s.evento;

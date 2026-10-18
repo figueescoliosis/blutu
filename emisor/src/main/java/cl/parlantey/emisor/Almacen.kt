@@ -38,6 +38,7 @@ object Almacen {
                 val mediciones = lista(prefs.getString("mediciones", null), ::medicion)
                 val tono = lista(prefs.getString("pruebasTono", null), ::resumenTono)
                 val musica = lista(prefs.getString("musica", null), ::resumenMusica)
+                val capturas = lista(prefs.getString("capturas", null), ::resumenCaptura)
                 val kBps = try {
                     prefs.getString("kBps", null)?.let { t ->
                         val o = JSONObject(t)
@@ -52,6 +53,7 @@ object Almacen {
                         // Lo que quedó "en curso" cuando se cerró la app ya no sigue.
                         pruebasTono = tono.map { r -> r.copy(terminado = true) } + it.pruebasTono,
                         musica = musica.map { r -> r.copy(terminado = true) } + it.musica,
+                        capturas = capturas.map { r -> r.copy(terminado = true) } + it.capturas,
                         kBpsPorReceptor = kBps + it.kBpsPorReceptor,
                     )
                 }
@@ -60,7 +62,7 @@ object Almacen {
             }
             alcance.launch {
                 EstadoEmisor.estado
-                    .map { listOf(it.mediciones, it.pruebasTono, it.musica, it.kBpsPorReceptor) }
+                    .map { listOf(it.mediciones, it.pruebasTono, it.musica, it.capturas, it.kBpsPorReceptor) }
                     .distinctUntilChanged()
                     .conflate()
                     .collect {
@@ -80,6 +82,7 @@ object Almacen {
             putString("mediciones", JSONArray(e.mediciones.map(::json)).toString())
             putString("pruebasTono", JSONArray(e.pruebasTono.map(::json)).toString())
             putString("musica", JSONArray(e.musica.map(::json)).toString())
+            putString("capturas", JSONArray(e.capturas.map(::json)).toString())
             putString("kBps", kBps.toString())
         }
     }
@@ -157,6 +160,34 @@ object Almacen {
         muestrasBuffer = o.getLong("muestrasBuffer"),
         reconexiones = o.getInt("reconexiones"),
         recuperacionMs = o.getLong("recuperacionMs").takeIf { it >= 0 },
+        terminado = true,
+    )
+
+    private fun json(r: ResumenCaptura) = JSONObject()
+        .put("inicio", r.inicio).put("duracionMs", r.hastaMs - r.desdeMs).put("opcion", r.opcion.name)
+        .put("presets", JSONArray(r.presets)).put("formato", r.formato).put("cortes", r.cortes)
+        .put("bufferMinMs", r.bufferMinMs).put("bufferMaxMs", r.bufferMaxMs).put("bufferSumaMs", r.bufferSumaMs)
+        .put("latenciaMinMs", r.latenciaMinMs).put("latenciaMaxMs", r.latenciaMaxMs)
+        .put("latenciaSumaMs", r.latenciaSumaMs).put("muestras", r.muestras)
+        .put("descartadosMs", r.descartadosMs).put("reconexiones", r.reconexiones)
+
+    private fun resumenCaptura(o: JSONObject) = ResumenCaptura(
+        inicio = o.getString("inicio"),
+        desdeMs = 0,
+        hastaMs = o.getLong("duracionMs"),
+        opcion = o.opcion(),
+        presets = o.textos("presets"),
+        formato = o.optString("formato"),
+        cortes = o.getLong("cortes"),
+        bufferMinMs = o.getLong("bufferMinMs"),
+        bufferMaxMs = o.getLong("bufferMaxMs"),
+        bufferSumaMs = o.getLong("bufferSumaMs"),
+        latenciaMinMs = o.getLong("latenciaMinMs"),
+        latenciaMaxMs = o.getLong("latenciaMaxMs"),
+        latenciaSumaMs = o.getLong("latenciaSumaMs"),
+        muestras = o.getLong("muestras"),
+        descartadosMs = o.getLong("descartadosMs"),
+        reconexiones = o.getInt("reconexiones"),
         terminado = true,
     )
 

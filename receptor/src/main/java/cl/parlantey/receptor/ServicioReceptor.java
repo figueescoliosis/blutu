@@ -382,7 +382,9 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
                 + " µs (prom./máx.), intervalo máx. de escritura " + r.intervaloMaximoMs() + " ms, desbordes "
                 + cola.desbordes() + ", errores de salida " + r.erroresSalida() + ", GC " + gcPorMinuto
                 + "/min, CPU " + cpuPorciento + " %, prioridad del audio " + hiloAudio.prioridadEfectiva
-                + ", getMinBufferSize " + salida.minBufferBytes + " B");
+                + ", getMinBufferSize " + salida.minBufferBytes + " B"
+                + (c != null && c.enVivo ? ", en vivo: frames +" + r.framesDuplicados() + "/−" + r.framesDescartados()
+                        + ", bloques descartados " + r.bloquesDescartados() : ""));
         cortesAnteriores = cortes;
     }
 

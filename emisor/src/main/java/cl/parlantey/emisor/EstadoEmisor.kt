@@ -83,7 +83,7 @@ data class EnVivo(
     val ultimoSeq: Long,
 )
 
-enum class Modo { TONO, MUSICA }
+enum class Modo { TONO, MUSICA, CAPTURA }
 
 /** Lo que suena: el tono de prueba o la cola de música (sigue vivo durante las reconexiones). */
 data class Reproduccion(
@@ -106,7 +106,37 @@ data class Reproduccion(
     val vivo: EnVivo? = null,
     /** Última canción que no se pudo abrir (se saltó). */
     val error: String? = null,
+    /** Captura: lo que espera para sonar (nivel estimado + lo pendiente en la captura), en ms. */
+    val latenciaMs: Long = 0,
+    /** Captura: ms descartados porque el enlace se atrasó. */
+    val descartadosMs: Long = 0,
+    /** Captura: hace ≥ 3 s que llega solo silencio (la app que suena puede bloquear la captura). */
+    val silencio: Boolean = false,
 )
+
+/** Resumen de una captura, para «Copiar para NOTAS (Fase 4)». */
+data class ResumenCaptura(
+    val inicio: String,
+    val desdeMs: Long,
+    val hastaMs: Long,
+    val opcion: OpcionPreset,
+    val presets: List<String> = emptyList(),
+    val formato: String = "",
+    val cortes: Long = 0,
+    val bufferMinMs: Long = Long.MAX_VALUE,
+    val bufferMaxMs: Long = 0,
+    val bufferSumaMs: Long = 0,
+    val latenciaMinMs: Long = Long.MAX_VALUE,
+    val latenciaMaxMs: Long = 0,
+    val latenciaSumaMs: Long = 0,
+    val muestras: Long = 0,
+    val descartadosMs: Long = 0,
+    val reconexiones: Int = 0,
+    val terminado: Boolean = false,
+) {
+    val bufferPromMs: Long get() = if (muestras == 0L) 0 else bufferSumaMs / muestras
+    val latenciaPromMs: Long get() = if (muestras == 0L) 0 else latenciaSumaMs / muestras
+}
 
 /** Resumen de una prueba de tono, para «Copiar para NOTAS (Fase 2)». */
 data class ResumenTono(
@@ -179,6 +209,7 @@ data class EstadoServicio(
     val reproduccion: Reproduccion? = null,
     val pruebasTono: List<ResumenTono> = emptyList(),
     val musica: List<ResumenMusica> = emptyList(),
+    val capturas: List<ResumenCaptura> = emptyList(),
     val mediciones: List<Medicion> = emptyList(),
     /** KB/s de la última prueba de enlace con cada receptor (por dirección): base del preset Auto. */
     val kBpsPorReceptor: Map<String, Double> = emptyMap(),
