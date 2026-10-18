@@ -177,7 +177,7 @@ public class FlujoEmisorTest {
     }
 
     @Test
-    public void empiezaConConfigYTrackYSeqCero() throws IOException {
+    public void empiezaConTrackYConfigYSeqCero() throws IOException {
         FlujoEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
@@ -185,9 +185,9 @@ public class FlujoEmisorTest {
         assertEquals(0, p.paso(0));
         List<Trama> t = con.nuevas();
         assertEquals(4, t.size());
-        assertEquals(Protocolo.CONFIG, t.get(0).tipo);
-        assertEquals(p.config(), t.get(0).config());
-        assertEquals(Protocolo.TRACK, t.get(1).tipo);
+        assertEquals(Protocolo.TRACK, t.get(0).tipo);
+        assertEquals(Protocolo.CONFIG, t.get(1).tipo);
+        assertEquals(p.config(), t.get(1).config());
         assertEquals(Protocolo.AUDIO, t.get(2).tipo);
         assertEquals(0, t.get(2).seq());
         assertEquals(p.config().largoAudio(), t.get(2).payload.length);
@@ -247,8 +247,8 @@ public class FlujoEmisorTest {
         p.conectar(nueva.escritor, nueva);
         hastaEsperar(p);
         List<Trama> t = nueva.nuevas();
-        assertEquals("CONFIG de nuevo al reconectar", Protocolo.CONFIG, t.get(0).tipo);
-        assertEquals(Protocolo.TRACK, t.get(1).tipo);
+        assertEquals("TRACK de nuevo al reconectar", Protocolo.TRACK, t.get(0).tipo);
+        assertEquals("y CONFIG", Protocolo.CONFIG, t.get(1).tipo);
         assertEquals("el seq vuelve a 0", 0, t.get(2).seq());
         assertEquals("el STATE ajeno no hace enviar de más", 94, contar(t, Protocolo.AUDIO));
 
@@ -488,9 +488,9 @@ public class FlujoEmisorTest {
         con.estado = new Estado(0, 0, 4, false); // el segundo sí
         f.paso(0);
         t = con.nuevas();
-        assertEquals(Protocolo.CONFIG, t.get(0).tipo);
-        assertEquals(48000, t.get(0).config().sampleRate);
-        assertEquals(Protocolo.TRACK, t.get(1).tipo);
+        assertEquals(Protocolo.TRACK, t.get(0).tipo);
+        assertEquals(Protocolo.CONFIG, t.get(1).tipo);
+        assertEquals(48000, t.get(1).config().sampleRate);
         assertEquals(Protocolo.AUDIO, t.get(2).tipo);
         assertEquals("el seq sigue", 5, t.get(2).seq());
     }

@@ -3,17 +3,17 @@ package cl.parlantey.core;
 import java.io.IOException;
 
 /**
- * El audio que el emisor envía por una conexión, pista tras pista. Escribe en orden CONFIG, TRACK,
- * CONTROL y AUDIO, regulado por el control de flujo con STATE. Sobrevive a los cambios de pista y a
+ * El audio que el emisor envía por una conexión, pista tras pista. Escribe en orden CONTROL, TRACK,
+ * CONFIG y AUDIO, regulado por el control de flujo con STATE. Sobrevive a los cambios de pista y a
  * las reconexiones ({@link #conectar}). Lo usa un solo hilo, que llama a {@link #paso} en bucle.
  *
  * <p><b>Cambios de pista</b> (PROTOCOLO.md):
  * <ul>
- * <li>{@link #reproducir} con {@code vaciar}: VACIAR → CONFIG (si cambia el formato) → TRACK → AUDIO.</li>
+ * <li>{@link #reproducir} con {@code vaciar}: VACIAR → TRACK → CONFIG (si cambia el formato) → AUDIO.</li>
  * <li>Fin natural de una pista con {@link #siguiente} del mismo formato: sin pausa, sin VACIAR ni
  * CONFIG; el TRACK sale cuando el receptor termina de sonar la anterior (le queda menos de un
  * bloque de ella). Para eso lleva las pistas que el receptor tiene en el buffer ("tramos").</li>
- * <li>Fin natural con otro formato: FIN; cuando el receptor terminó de sonar, CONFIG → TRACK → AUDIO.</li>
+ * <li>Fin natural con otro formato: FIN; cuando el receptor terminó de sonar, TRACK → CONFIG → AUDIO.</li>
  * <li>Fin de la última pista: FIN.</li>
  * </ul>
  *
@@ -257,6 +257,7 @@ public final class FlujoEmisor {
             pasarASiguiente();
         }
 
+        avanzarTramos(nivel); // TRACK antes que CONFIG (CLAUDE.md: VACIAR → TRACK → CONFIG → audio)
         if (!configActual.equals(configEnviado)) {
             if (configEnviado != null && !actual.mismoFormato(configEnviado)) {
                 // Otro formato: el receptor empieza una generación nueva y descarta lo encolado.
@@ -265,7 +266,6 @@ public final class FlujoEmisor {
             escritor.config(configActual);
             configEnviado = configActual;
         }
-        avanzarTramos(nivel);
         if (nivel >= objetivoMs) {
             return ESPERA_LLENO_MS;
         }

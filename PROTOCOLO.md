@@ -1,4 +1,4 @@
-# Protocolo ParlanteY — versión 1
+# Protocolo ParlanteY — versión 2
 
 Fuente de verdad del protocolo entre el **emisor** (Android 8+) y el **receptor** (Galaxy Y, Android 2.3).
 Todo cambio exige: actualizar este archivo + los tests de `core` + `Protocolo.VERSION` (y el historial al final).
@@ -8,7 +8,8 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 - Mensajes: `Hello`, `Config`, `Track`, `Estado`, `Seq`.
 - Códec: `ImaAdpcm`, `CodificadorIma`.
 - Sesiones: `SesionEmisor`, `SesionReceptor`.
-- Reproducción y envío (Fase 2): `ColaBloques`, `Reproductor`, `Salida` (receptor); `PipelineEmisor`, `FuenteTono`, `Preset` (emisor).
+- Reproducción (receptor): `ColaBloques`, `Reproductor`, `Salida`.
+- Envío (emisor): `FlujoEmisor` (tramas de una conexión, pista tras pista), `CodificadorPista` (una `Fuente` → bloques), `ControlCola` (la cola: abrir, siguiente, anterior, pausa, reconexión), `FuenteTono`, `Preset`.
 
 ## Estado de implementación
 
@@ -18,7 +19,7 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 | 0x02 CONFIG | ✅ Fase 1 | ✅ Fase 2 (tono de prueba) |
 | 0x03 AUDIO | ✅ Fase 1 | ✅ Fase 2 |
 | 0x04 TRACK | ✅ Fase 1 | ✅ Fase 2 |
-| 0x05 CONTROL | ✅ Fase 1 | ✅ Fase 2: VACIAR y DETENER en ambos; PAUSA y REANUDAR solo en el receptor (el emisor los usa en la Fase 3) |
+| 0x05 CONTROL | ✅ Fase 1 (FIN: Fase 3) | ✅ Fase 3: los cinco comandos en ambas apps |
 | 0x06 STATE | ✅ Fase 1 | ✅ Fase 2 |
 | 0x07 PING / 0x08 PONG | ✅ Fase 0 | ✅ Fase 0 |
 | 0x09 TEST_DATA / 0x0A TEST_RESULT | ✅ Fase 0 | ✅ Fase 0 |
@@ -66,8 +67,11 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 4. Sigue el intercambio de tramas:
    - **El emisor envía un PING por segundo, siempre** (también mientras envía audio): es el keepalive y da el RTT en vivo. Cualquier PONG sirve para el RTT, porque el timestamp es el instante de envío.
    - **El receptor envía STATE cada 250 ms desde el HELLO** hasta el fin de la conexión, haya audio o no.
-5. Para reproducir, el emisor envía **CONFIG**, luego **TRACK** (opcional) y después **AUDIO** regulado por el control de flujo (§5, STATE).
-   - Cambio de pista: CONTROL VACIAR → TRACK → CONFIG (solo si cambian tasa o canales) → AUDIO.
+5. Para reproducir, el emisor envía **TRACK** (opcional), luego **CONFIG** y después **AUDIO** regulado por el control de flujo (§5, STATE). TRACK solo cambia lo que muestra el receptor: su orden respecto de CONFIG no afecta el audio.
+   - **Cambio de pista pedido** (siguiente, anterior, elegir otra): CONTROL VACIAR → TRACK → CONFIG (solo si cambian tasa o canales) → AUDIO.
+   - **Fin natural, la siguiente con el mismo formato de salida:** sin VACIAR, FIN ni CONFIG; el audio de la siguiente sigue al de la anterior sin pausa (cada pista empieza con el códec en cero, §6). El TRACK de la siguiente sale cuando al receptor le queda menos de un bloque de la anterior (se estima con el nivel del control de flujo).
+   - **Fin natural, la siguiente con otro formato:** CONTROL FIN; el emisor espera a que el receptor termine de sonar (ver «Receptor vacío tras FIN» en §5, STATE) y sigue con TRACK → CONFIG → AUDIO. Queda una pausa corta mientras se vuelve a llenar.
+   - **Fin de la cola:** CONTROL FIN. El receptor suena lo que queda y se detiene sin contar un corte.
 6. Cualquiera de los dos puede cerrar con **BYE(código)**. Si la conexión se pierde, el receptor vuelve a `accept()` solo.
 7. **Watchdogs** (no hace falta ninguna trama nueva: STATE y PING llegan siempre):
    - El receptor cierra la conexión si pasan **5 s sin ninguna trama** del emisor.
@@ -83,7 +87,7 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 | 0x02 CONFIG | E→R | códec u8 (1 = IMA ADPCM), sampleRate u32, canales u8, muestrasPorBloque u16, bufferObjetivoMs u32 |
 | 0x03 AUDIO | E→R | seq u32 + bloque ADPCM |
 | 0x04 TRACK | E→R | título UTF, artista UTF, duraciónMs u32 (0 = en vivo) |
-| 0x05 CONTROL | E→R | cmd u8: 1 PAUSA, 2 REANUDAR, 3 VACIAR, 4 DETENER |
+| 0x05 CONTROL | E→R | cmd u8: 1 PAUSA, 2 REANUDAR, 3 VACIAR, 4 DETENER, 5 FIN |
 | 0x06 STATE | R→E | bufferMs u32, cortes u32, ultimoSeq u32, reproduciendo u8 (cada 250 ms) |
 | 0x07 PING | E→R | timestamp u64 |
 | 0x08 PONG | R→E | timestamp u64 (eco del PING) |
@@ -93,9 +97,9 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 
 ### 0x01 HELLO (R→E)
 
-| Campo | Tipo | Valor en el receptor v1 |
+| Campo | Tipo | Valor en el receptor v2 |
 |---|---|---|
-| versión | u8 | `1` (`Protocolo.VERSION`) |
+| versión | u8 | `2` (`Protocolo.VERSION`) |
 | apiLevel | u16 | `Build.VERSION.SDK_INT` (10 en el Galaxy Y) |
 | nombre | UTF | nombre Bluetooth del receptor (o `Build.MODEL` si no hay) |
 | maxCanales | u8 | `2` |
@@ -143,6 +147,7 @@ Título UTF, artista UTF y duraciónMs u32 (0 = en vivo). Solo informa a la UI d
 | 2 REANUDAR | Reanuda. Si la cola y lo pendiente en `AudioTrack` no alcanzan para llenarlo, vuelve a llenar hasta el umbral de arranque (en 2.3, una pista reanudada no suena hasta llenarse de nuevo). No cuenta como corte. |
 | 3 VACIAR | Descarta la cola y lo pendiente en `AudioTrack` (`pause()` + `flush()`: en 2.3, `flush()` con la pista sonando no hace nada), conserva el CONFIG y vuelve a llenar hasta el umbral de arranque antes de sonar. **Conserva la pausa**: si estaba en PAUSA, sigue en pausa. |
 | 4 DETENER | Lo mismo que VACIAR, más `stop()` y liberar `AudioTrack`. Olvida el CONFIG: el siguiente audio necesita un CONFIG nuevo. **Quita la pausa**: el audio siguiente empieza sonando. |
+| 5 FIN (v2) | No viene más audio por ahora. Si está llenando, empieza a sonar aunque no llegue al umbral. Cuando la cola se vacía, escribe silencio detrás del audio real (sin contar corte) hasta que este suena entero; entonces hace lo mismo que VACIAR (conserva CONFIG y pausa) y STATE informa `reproduciendo` = 0 y `bufferMs` = 0. Un AUDIO que llega antes cancela el FIN (sigue sin corte); uno que llega después vuelve a llenar hasta el umbral, como tras VACIAR. VACIAR, DETENER y un CONFIG de otro formato también lo cancelan. |
 
 - Un comando desconocido se ignora, para que versiones futuras puedan agregar comandos.
 - CONFIG, VACIAR y DETENER se aplican **en el orden en que llegan** respecto de los AUDIO: nunca suena audio recibido antes de un VACIAR, aunque el hilo de audio se atrase.
@@ -155,7 +160,7 @@ Payload de 13 bytes:
 | Campo | Tipo | Significado |
 |---|---|---|
 | bufferMs | u32 | bloques en cola × ms por bloque + (frames escritos − `getPlaybackHeadPosition()`) en ms. Cuenta solo audio real: el silencio de relleno no. Acotado a 0…capacidadBufferMs. |
-| cortes | u32 | veces que la cola se vació mientras sonaba, desde que se conectó. Un corte largo cuenta una vez. Arrancar, VACIAR, DETENER, un CONFIG nuevo y REANUDAR no cuentan. |
+| cortes | u32 | veces que la cola se vació mientras sonaba, desde que se conectó. Un corte largo cuenta una vez. Arrancar, VACIAR, DETENER, un CONFIG nuevo, REANUDAR y vaciarse tras un FIN no cuentan. |
 | ultimoSeq | u32 | seq del último AUDIO **recibido** en esta conexión. Antes del primero vale `0xFFFFFFFF` (`Protocolo.SEQ_NINGUNO`, equivale a −1). |
 | reproduciendo | u8 | 1 si `AudioTrack` está sonando audio real; 0 si no (sin CONFIG, llenando, en pausa o rellenando tras un corte). Al recibir, cualquier valor ≠ 0 cuenta como 1. |
 
@@ -166,6 +171,7 @@ Payload de 13 bytes:
 - Se envía mientras el nivel sea menor que el objetivo (`bufferObjetivoMs` del CONFIG). El nivel nunca pasa del objetivo + 1 bloque.
 - **Corte del flujo:** al empezar un audio en la conexión (seq siguiente = `seqCorte`) y tras cada VACIAR, los STATE con `ultimoSeq` anterior a `seqCorte` describen un buffer que ya no existe. Se ignoran hasta que llegue uno con `Seq.distancia(ultimoSeq, seqCorte) ≥ 0`; mientras tanto, nivel = todo lo enviado desde el corte.
 - Un STATE con `Seq.distancia(seqEnviado, ultimoSeq) < 0` (un seq que no se envió) también se ignora.
+- **Receptor vacío tras FIN:** dos STATE seguidos con `ultimoSeq` = el seq del último AUDIO antes del FIN y `bufferMs` = 0 (uno solo puede quedarse corto en un bloque que el hilo de audio está escribiendo). Si no llegan, se da por vacío cuando pasó el nivel que había al enviar FIN + 3 s, sin contar el tiempo en pausa. `reproduciendo` no se usa (también es 0 en pausa). Si la conexión se corta mientras espera, el receptor de la conexión nueva ya está vacío.
 - **No sirve basarse en que `write()` bloquee.** En la Fase 0 el emisor (Android 16) aceptó ~1,5 MB en el socket sin bloquear (NOTAS.md).
 
 ### 0x07 PING / 0x08 PONG
@@ -262,3 +268,4 @@ Con la regla del 70 %, la prueba de enlace debe medir al menos:
 | 1 | 2026-10-17 | Precisiones de la Fase 1, sin cambios de formato: semántica de CONFIG, AUDIO, TRACK, CONTROL y STATE; `ultimoSeq` y control de flujo; el bloque ADPCM al detalle (predictor big-endian, cabecera = estado antes de la primera muestra, relleno del último bloque). Se implementan en `core` todas las tramas. |
 | 1 | 2026-10-17 | Precisiones de la Fase 2, sin cambios de formato: STATE cada 250 ms desde el HELLO; PING cada 1 s siempre; watchdogs de 5 s (receptor) y 4 s (emisor); fin de conexión = DETENER; seq por conexión; `ultimoSeq` cuenta los AUDIO descartados; VACIAR = `pause()` + `flush()` y conserva la pausa; umbral de arranque; `bufferMs` sin el silencio de relleno; definición de corte; control de flujo con `seqCorte`. |
 | 1 | 2026-10-18 | Tras la revisión de la Fase 2, sin cambios de formato: pausa, `ultimoSeq` y `cortes` son por conexión (también en el primer STATE); DETENER quita la pausa; se quita la regla de "más bloques en vuelo que la capacidad", que nunca cambiaba el resultado. |
+| 2 | 2026-10-18 | Fase 3: **CONTROL 5 = FIN** (sonar lo que queda y detenerse sin contar corte). Cambios de pista: pedido (VACIAR → TRACK → CONFIG → AUDIO), fin natural con el mismo formato (sin pausa, TRACK cuando suena) y con otro formato (FIN, esperar el receptor vacío, TRACK → CONFIG → AUDIO); TRACK va antes que CONFIG. Un receptor v1 y un emisor v2 (o al revés) no conectan: BYE(1). |
