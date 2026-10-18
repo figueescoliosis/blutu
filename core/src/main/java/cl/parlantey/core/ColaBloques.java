@@ -36,6 +36,8 @@ public final class ColaBloques {
     private int desbordes;
     /** Cuenta cada aviso (bloque, generación, despertar): para no perder uno entre paso y espera. */
     private long eventos;
+    /** FIN recibido después del último bloque encolado (de la generación vigente). */
+    private boolean fin;
 
     /**
      * @param bloques           tamaño del pool (p. ej. 188: 4000 ms a 48 kHz con bloques de 1024)
@@ -76,6 +78,7 @@ public final class ColaBloques {
     public synchronized void encolar(Bloque b, long seq) {
         b.seq = seq;
         ultimoSeq = seq;
+        fin = false; // audio después de un FIN: el flujo sigue
         cola[(inicio + cantidad) % cola.length] = b;
         cantidad++;
         avisar();
@@ -84,6 +87,20 @@ public final class ColaBloques {
     /** Registra un AUDIO recibido que no se encola (sin CONFIG o pool agotado). */
     public synchronized void recibido(long seq) {
         ultimoSeq = seq;
+    }
+
+    /**
+     * CONTROL FIN: después de lo encolado no viene más audio. El reproductor lo deja sonar y se
+     * detiene sin contar corte. Un AUDIO posterior o una generación nueva lo anulan.
+     */
+    public synchronized void marcarFin() {
+        fin = true;
+        avisar();
+    }
+
+    /** true si hay un FIN pendiente en la generación {@code generacionAplicada}. */
+    public synchronized boolean finPedido(int generacionAplicada) {
+        return fin && generacionAplicada == generacion;
     }
 
     /** Conexión nueva: todavía no llegó ningún AUDIO ({@link Protocolo#SEQ_NINGUNO}). */
@@ -105,6 +122,7 @@ public final class ColaBloques {
         inicio = 0;
         generacion++;
         config = nuevo;
+        fin = false;
         avisar();
     }
 

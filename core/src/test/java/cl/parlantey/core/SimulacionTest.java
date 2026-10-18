@@ -15,7 +15,7 @@ import org.junit.Test;
  * simulado como el de la Fase 0: 165 KB/s y ~1,5 MB de buffer en el socket del emisor. Cada
  * "hilo" se modela como en las apps: el de red del receptor lee las tramas que llegaron, el de
  * STATE hace su tick, el de audio da pasos hasta que pide esperar (y se despierta antes si llega
- * un bloque), y el emisor da pasos de su pipeline (despertando con cada STATE) y un PING por segundo.
+ * un bloque), y el emisor da pasos de su flujo (despertando con cada STATE) y un PING por segundo.
  */
 public class SimulacionTest {
 
@@ -25,7 +25,7 @@ public class SimulacionTest {
     private static final Hello HELLO = new Hello(Protocolo.VERSION, 10, "GT-S5360L", 2, 4000);
 
     /** Fuente estéreo de valor constante, que se puede cambiar (para ver qué suena después de VACIAR). */
-    private static final class FuenteConstante implements PipelineEmisor.Fuente {
+    private static final class FuenteConstante implements Fuente {
         volatile short valor;
 
         FuenteConstante(int valor) {
@@ -49,7 +49,7 @@ public class SimulacionTest {
         }
     }
 
-    private static final class Simulacion implements PipelineEmisor.Estados {
+    private static final class Simulacion implements FlujoEmisor.Estados {
         final long[] ahora = {0};
         EnlaceSimulado er = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
         EnlaceSimulado re = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
@@ -61,7 +61,7 @@ public class SimulacionTest {
         EscritorTramas escritorEmisor = new EscritorTramas(er.salida);
         /** Primer STATE recibido en la conexión actual. */
         Estado primerEstado;
-        PipelineEmisor pipeline;
+        FlujoEmisor flujo;
 
         Estado estado;
         long estadosRecibidos;
@@ -83,14 +83,14 @@ public class SimulacionTest {
         long bufferMaxMs;
         int enColaMax;
 
-        Simulacion(PipelineEmisor pipeline, int capacidadSalida, int granularidad) throws IOException {
+        Simulacion(FlujoEmisor flujo, int capacidadSalida, int granularidad) throws IOException {
             salida = new SalidaFalsa(capacidadSalida, granularidad, 0, 0);
             reproductor = new Reproductor(cola, salida, HELLO.capacidadBufferMs);
-            this.pipeline = pipeline;
+            this.flujo = flujo;
             iniciarConexion();
         }
 
-        /** HELLO del receptor; el emisor lo lee y conecta el pipeline. */
+        /** HELLO del receptor; el emisor lo lee y conecta el flujo. */
         private void iniciarConexion() throws IOException {
             receptor = new SesionReceptor(er.entrada, re.salida, HELLO, cola, reproductor, null, () -> ahora[0]);
             receptor.iniciar();
@@ -98,8 +98,8 @@ public class SimulacionTest {
             if (!re.tramaCompleta() || lectorEmisor.leer() != Protocolo.HELLO) {
                 fail("no llegó el HELLO");
             }
-            if (pipeline != null) {
-                pipeline.conectar(escritorEmisor, this);
+            if (flujo != null) {
+                flujo.conectar(escritorEmisor, this);
             }
         }
 
@@ -110,8 +110,8 @@ public class SimulacionTest {
         void reconectar() throws IOException {
             receptor.terminar();
             pasosAudio(ahora[0]);
-            if (pipeline != null) {
-                pipeline.desconectar();
+            if (flujo != null) {
+                flujo.desconectar();
             }
             er = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
             re = new EnlaceSimulado(KBPS_ENLACE, BUFFER_SOCKET);
@@ -192,14 +192,10 @@ public class SimulacionTest {
                     escritorEmisor.ping(t);
                     proximoPingNs = t + SesionEmisor.INTERVALO_PING_NS;
                 }
-                if (pipeline != null && (t >= despertarEmisorNs || estadosRecibidos != estadosVistos)) {
+                if (flujo != null && (t >= despertarEmisorNs || estadosRecibidos != estadosVistos)) {
                     estadosVistos = estadosRecibidos;
                     long espera = pasosEmisor(t);
-                    if (espera == PipelineEmisor.FIN) {
-                        pipeline = null;
-                    } else {
-                        despertarEmisorNs = t + espera * MS;
-                    }
+                    despertarEmisorNs = t + (espera == FlujoEmisor.FIN ? 50 : espera) * MS;
                 }
             }
         }
@@ -216,13 +212,13 @@ public class SimulacionTest {
 
         private long pasosEmisor(long t) throws IOException {
             for (int i = 0; i < 10000; i++) {
-                long espera = pipeline.paso(t);
-                nivelMaxMs = Math.max(nivelMaxMs, pipeline.nivelEstimadoMs());
+                long espera = flujo.paso(t);
+                nivelMaxMs = Math.max(nivelMaxMs, flujo.nivelEstimadoMs());
                 if (espera != 0) {
                     return espera;
                 }
             }
-            throw new AssertionError("el pipeline nunca pide esperar");
+            throw new AssertionError("el flujo nunca pide esperar");
         }
 
         private void cerrarReceptor(long t) {
@@ -233,9 +229,12 @@ public class SimulacionTest {
         }
     }
 
-    private static PipelineEmisor tono(Preset preset) {
-        return new PipelineEmisor(new FuenteTono(48000, 2), preset, new Track("Tono de prueba", "440 Hz", 0),
-                PipelineEmisor.OBJETIVO_ARCHIVOS_MS);
+    private static final Track TONO = new Track("Tono de prueba", "440 Hz", 0);
+
+    private static FlujoEmisor tono(Preset preset) {
+        FlujoEmisor f = new FlujoEmisor(FlujoEmisor.OBJETIVO_ARCHIVOS_MS);
+        f.reproducir(new CodificadorPista(new FuenteTono(48000, 2), preset), TONO, true);
+        return f;
     }
 
     /** Criterio de la Fase 2 en la JVM: 10 minutos de tono sin cortes, con el nivel acotado. */
@@ -244,7 +243,7 @@ public class SimulacionTest {
         for (Preset preset : new Preset[] {Preset.ALTA, Preset.SEGURA}) {
             Simulacion s = new Simulacion(tono(preset), 8192, 1024);
             s.correr(10 * 60 * 1000);
-            Config c = s.pipeline.config();
+            Config c = s.flujo.config();
             String p = preset.nombre + ": ";
             assertEquals(p + "cortes", 0, s.reproductor.cortes());
             assertEquals(p + "subcortes", 0, s.reproductor.subcortes());
@@ -312,14 +311,13 @@ public class SimulacionTest {
 
     @Test
     public void vaciarDescartaLoViejoSinCorte() throws IOException {
-        FuenteConstante fuente = new FuenteConstante(20000);
-        PipelineEmisor p = new PipelineEmisor(fuente, Preset.ALTA, null, 2000);
+        FlujoEmisor p = new FlujoEmisor(2000);
+        p.reproducir(new CodificadorPista(new FuenteConstante(20000), Preset.ALTA), null, true);
         Simulacion s = new Simulacion(p, 8192, 1024);
         s.correr(10000);
         assertEquals(Reproductor.SONANDO, s.reproductor.estado());
 
-        fuente.valor = -20000;
-        p.pedirVaciar();
+        p.reproducir(new CodificadorPista(new FuenteConstante(-20000), Preset.ALTA), null, true);
         s.salida.umbral = 10000;
         s.salida.vigilarAlVaciar = true;
         s.correr(10000);
@@ -337,9 +335,9 @@ public class SimulacionTest {
     public void detenerCierraLaSalidaYLaConexionSigue() throws IOException {
         Simulacion s = new Simulacion(tono(Preset.NORMAL), 8192, 1024);
         s.correr(10000);
-        s.pipeline.pedirDetener();
+        s.flujo.detener();
         s.correr(1000);
-        assertNull("el pipeline terminó", s.pipeline);
+        assertTrue("el flujo terminó", s.flujo.detenido());
         assertEquals(Reproductor.SIN_CONFIG, s.reproductor.estado());
         assertFalse(s.salida.abierta());
         assertEquals(0, s.reproductor.cortes());
@@ -351,8 +349,7 @@ public class SimulacionTest {
         // Un tono nuevo en la misma conexión vuelve a sonar; el seq sigue (no vuelve a 0).
         long seqAntes = s.cola.ultimoSeq();
         assertTrue(seqAntes > 400);
-        s.pipeline = tono(Preset.ALTA);
-        s.pipeline.conectar(s.escritorEmisor, s);
+        s.flujo.reproducir(new CodificadorPista(new FuenteTono(48000, 2), Preset.ALTA), TONO, true);
         s.correr(5000);
         assertEquals(Reproductor.SONANDO, s.reproductor.estado());
         assertEquals(2, s.salida.canales());

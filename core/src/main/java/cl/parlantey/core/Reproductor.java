@@ -94,6 +94,7 @@ public final class Reproductor {
     private volatile int framesPendientes;
     private volatile int estadoPublicado = SIN_CONFIG;
     private volatile boolean reproduciendo;
+    private volatile boolean finalizado;
     private volatile int cortes;
     private volatile int subcortes;
     private volatile int erroresSalida;
@@ -289,11 +290,22 @@ public final class Reproductor {
     }
 
     private long pasoLlenando() {
-        if (cola.enCola() < umbralBloques) {
+        int enCola = cola.enCola();
+        if (enCola < umbralBloques && (enCola == 0 || !cola.finPedido(generacion))) {
             return 20;
         }
+        // Umbral alcanzado, o FIN: no viene más, así que suena lo que hay aunque sea poco.
         arrancar(SONANDO);
         return 0;
+    }
+
+    /** FIN y ya sonó todo lo real: vaciar la salida (solo queda silencio) y esperar audio nuevo. */
+    private long terminarFin() {
+        soltarActual();
+        salida.vaciar();
+        reiniciarPosicion();
+        estado = LLENANDO;
+        return ESPERA_INACTIVO_MS;
     }
 
     /** Empieza (o retoma) a sonar. Las métricas de continuidad parten de cero. */
@@ -314,6 +326,14 @@ public final class Reproductor {
 
     private long pasoSonando(long ahoraNs) {
         int bloque = config.muestrasPorBloque;
+        if (estado == RELLENANDO && cola.finPedido(generacion)) {
+            // El flujo terminó durante un corte: sonar lo que quedó en la cola, o terminar.
+            if (cola.enCola() == 0) {
+                return terminarFin();
+            }
+            marcarSilencioDelante();
+            estado = SONANDO;
+        }
         if (estado == RELLENANDO && cola.enCola() >= umbralBloques) {
             marcarSilencioDelante(); // y el resto del bloque de silencio en curso no hace falta
             estado = SONANDO;
@@ -327,12 +347,20 @@ public final class Reproductor {
                 }
                 if (b == null) {
                     int pendiente = pendienteReal();
-                    if (pendiente > bloque) {
+                    if (cola.finPedido(generacion)) {
+                        if (pendiente <= 0) {
+                            return terminarFin();
+                        }
+                        // FIN: mientras suena lo que queda, silencio detrás (sin corte). La salida
+                        // sigue llena y, si no se había llenado nunca, así arranca (en 2.3 no suena
+                        // hasta llenarse).
+                    } else if (pendiente > bloque) {
                         // Aún suena audio real: esperar a que quede ~1 bloque antes de declarar corte.
                         return Math.max(1, config.msParaFrames(pendiente - bloque));
+                    } else {
+                        cortes++;
+                        estado = RELLENANDO;
                     }
-                    cortes++;
-                    estado = RELLENANDO;
                 } else {
                     if (framesDesdeArranque >= capacidad) { // la salida ya se llenó una vez
                         int pendiente = pendienteReal();
@@ -346,7 +374,7 @@ public final class Reproductor {
                     decodificar(b);
                 }
             }
-            if (porEscribir == null) { // RELLENANDO: un bloque de silencio
+            if (porEscribir == null) { // RELLENANDO o FIN: un bloque de silencio
                 porEscribir = silencio;
                 desde = 0;
                 frames = bloque;
@@ -516,6 +544,7 @@ public final class Reproductor {
         framesPendientes = pendiente;
         estadoPublicado = estado;
         reproduciendo = estado == SONANDO && !pausado;
+        finalizado = estado == LLENANDO && cola.finPedido(generacion) && cola.enCola() == 0;
     }
 
     // --- Lecturas para el hilo de STATE y la UI (cualquier hilo).
@@ -542,6 +571,11 @@ public final class Reproductor {
 
     public boolean reproduciendo() {
         return reproduciendo;
+    }
+
+    /** Llegó FIN y ya sonó todo (para la UI: «Fin de la cola»). */
+    public boolean finalizado() {
+        return finalizado;
     }
 
     public boolean pausado() {

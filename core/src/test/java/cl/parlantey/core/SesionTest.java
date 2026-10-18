@@ -172,7 +172,7 @@ public class SesionTest {
     public void versionDistintaTerminaConBye() throws Exception {
         arrancarReceptor(s -> {
             EscritorTramas e = new EscritorTramas(s.getOutputStream());
-            e.hello(new Hello(2, 10, "receptor del futuro", 2, 4000));
+            e.hello(new Hello(Protocolo.VERSION + 1, 10, "receptor del futuro", 2, 4000));
             LectorTramas l = new LectorTramas(s.getInputStream());
             assertEquals(Protocolo.BYE, l.leer());
             return l.datos().readUnsignedByte();
@@ -180,9 +180,9 @@ public class SesionTest {
         SesionEmisor sesion = conectar();
         try {
             sesion.esperarHello();
-            fail("debió rechazar la versión 2");
+            fail("debió rechazar la versión futura");
         } catch (VersionIncompatibleException e) {
-            assertEquals(2, e.versionRemota);
+            assertEquals(Protocolo.VERSION + 1, e.versionRemota);
         }
         assertEquals(Protocolo.BYE_VERSION, esperarReceptor());
     }

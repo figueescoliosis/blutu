@@ -5,7 +5,7 @@ package cl.parlantey.core;
  * desde una tabla con un número entero de ciclos (1200 muestras a 48 kHz, 2205 a 44,1 kHz), así que
  * no se desafina ni acumula error de fase. Nunca termina. No asigna memoria al leer.
  */
-public final class FuenteTono implements PipelineEmisor.Fuente {
+public final class FuenteTono implements Fuente {
 
     public static final int FRECUENCIA_HZ = 440;
     public static final double NIVEL_DBFS = -10;

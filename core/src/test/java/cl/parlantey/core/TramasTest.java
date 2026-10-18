@@ -47,7 +47,7 @@ public class TramasTest {
         escritor.hello(new Hello(Protocolo.VERSION, 10, "x", 2, 4000));
         byte[] esperado = {
                 0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0B, // cabecera, largo 11
-                0x01, // versión
+                0x02, // versión (v2)
                 0x00, 0x0A, // apiLevel
                 0x00, 0x01, 'x', // nombre UTF
                 0x02, // maxCanales
@@ -57,15 +57,15 @@ public class TramasTest {
 
     @Test
     public void helloDeOtraVersionSeRechazaLeyendoSoloElPrimerByte() throws IOException {
-        // Un HELLO "v2" con un formato que la v1 no entiende: solo importa el primer byte.
-        byte[] trama = {0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x02, (byte) 0xFF, (byte) 0xFF};
+        // Un HELLO "v3" con un formato que la v2 no entiende: solo importa el primer byte.
+        byte[] trama = {0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x03, (byte) 0xFF, (byte) 0xFF};
         LectorTramas l = lector(trama);
         assertEquals(Protocolo.HELLO, l.leer());
         try {
             Hello.leer(l.datos());
-            fail("debió rechazar la versión 2");
+            fail("debió rechazar la versión 3");
         } catch (VersionIncompatibleException e) {
-            assertEquals(2, e.versionRemota);
+            assertEquals(3, e.versionRemota);
             assertEquals("no debe leer más allá de la versión", 2, l.datos().available());
         }
     }
@@ -101,14 +101,20 @@ public class TramasTest {
 
     @Test
     public void helloDeOtraVersionSeRechaza() throws IOException {
-        escritor.hello(new Hello(2, 10, "futuro", 2, 4000));
+        // Una futura y la v1 (apps 0.2.0, sin CONTROL FIN).
+        int[] otras = {Protocolo.VERSION + 1, 1};
+        for (int v : otras) {
+            escritor.hello(new Hello(v, 10, "otra", 2, 4000));
+        }
         LectorTramas l = lector();
-        assertEquals(Protocolo.HELLO, l.leer());
-        try {
-            Hello.leer(l.datos());
-            fail("debió rechazar la versión 2");
-        } catch (VersionIncompatibleException e) {
-            assertEquals(2, e.versionRemota);
+        for (int v : otras) {
+            assertEquals(Protocolo.HELLO, l.leer());
+            try {
+                Hello.leer(l.datos());
+                fail("debió rechazar la versión " + v);
+            } catch (VersionIncompatibleException e) {
+                assertEquals(v, e.versionRemota);
+            }
         }
     }
 

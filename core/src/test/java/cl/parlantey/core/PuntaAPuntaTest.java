@@ -17,7 +17,7 @@ import org.junit.Test;
 /**
  * Emisor y receptor con hilos y sockets TCP de loopback, armados como en las apps: en el receptor,
  * hilo de red, de STATE y de audio (con una SalidaFalsa que suena en tiempo real); en el emisor,
- * SesionEmisor con su lector y un hilo que da pasos al pipeline del tono y envía PING cada 1 s.
+ * SesionEmisor con su lector y un hilo que da pasos al flujo del tono y envía PING cada 1 s.
  */
 public class PuntaAPuntaTest {
 
@@ -122,8 +122,8 @@ public class PuntaAPuntaTest {
         return new SesionEmisor(cliente.getInputStream(), cliente.getOutputStream());
     }
 
-    /** Hilo de E/S del emisor: pipeline + PING cada 1 s, durante {@code nanos}. */
-    private static void emitir(SesionEmisor sesion, PipelineEmisor pipeline, long nanos) throws IOException {
+    /** Hilo de E/S del emisor: flujo + PING cada 1 s, durante {@code nanos}. */
+    private static void emitir(SesionEmisor sesion, FlujoEmisor pipeline, long nanos) throws IOException {
         long fin = System.nanoTime() + nanos;
         long proximoPing = 0;
         while (System.nanoTime() - fin < 0) {
@@ -134,7 +134,7 @@ public class PuntaAPuntaTest {
             }
             long vistos = sesion.estadosRecibidos();
             long espera = pipeline.paso(ahora);
-            if (espera == PipelineEmisor.FIN) {
+            if (espera == FlujoEmisor.FIN) {
                 return;
             }
             if (espera > 0) {
@@ -151,8 +151,9 @@ public class PuntaAPuntaTest {
         Hello hello = sesion.esperarHello();
         assertEquals(4000, hello.capacidadBufferMs);
 
-        PipelineEmisor pipeline = new PipelineEmisor(new FuenteTono(48000, 2), Preset.ALTA,
-                new Track("Tono de prueba", "440 Hz", 0), PipelineEmisor.OBJETIVO_ARCHIVOS_MS);
+        FlujoEmisor pipeline = new FlujoEmisor(FlujoEmisor.OBJETIVO_ARCHIVOS_MS);
+        pipeline.reproducir(new CodificadorPista(new FuenteTono(48000, 2), Preset.ALTA),
+                new Track("Tono de prueba", "440 Hz", 0), true);
         pipeline.conectar(sesion.escritor(), sesion::estado);
         sesion.setAudioActivo(true);
         emitir(sesion, pipeline, 3 * SEGUNDO);

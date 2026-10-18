@@ -15,7 +15,7 @@ import java.util.Random;
 
 import org.junit.Test;
 
-public class PipelineEmisorTest {
+public class FlujoEmisorTest {
 
     private static final Track TONO = new Track("Tono de prueba", "440 Hz", 0);
 
@@ -40,7 +40,7 @@ public class PipelineEmisorTest {
     }
 
     /** Conexión falsa: captura lo escrito y entrega el STATE que se le fije. */
-    private static final class Conexion implements PipelineEmisor.Estados {
+    private static final class Conexion implements FlujoEmisor.Estados {
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         final EscritorTramas escritor = new EscritorTramas(bytes);
         Estado estado;
@@ -73,7 +73,7 @@ public class PipelineEmisorTest {
     }
 
     /** Fuente que entrega una señal fija en trozos de largo al azar (o completos con semilla < 0). */
-    private static final class FuenteTrozos implements PipelineEmisor.Fuente {
+    private static final class FuenteTrozos implements Fuente {
         private final short[] senal;
         private final int tasa;
         private final int canales;
@@ -102,7 +102,7 @@ public class PipelineEmisorTest {
         public int leer(short[] destino, int desdeFrame, int frames) {
             int quedan = senal.length / canales - pos;
             if (quedan == 0) {
-                return PipelineEmisor.FIN_FUENTE;
+                return Fuente.FIN;
             }
             int n = Math.min(frames, quedan);
             if (azar != null) {
@@ -118,12 +118,19 @@ public class PipelineEmisorTest {
         }
     }
 
-    private static PipelineEmisor tono(int tasa, int canales, Preset preset) {
-        return new PipelineEmisor(new FuenteTono(tasa, canales), preset, TONO, PipelineEmisor.OBJETIVO_ARCHIVOS_MS);
+    /** Un flujo con una sola pista ya elegida (se envía al conectar). */
+    private static FlujoEmisor flujo(Fuente fuente, Preset preset, Track track, long objetivoMs) {
+        FlujoEmisor f = new FlujoEmisor(objetivoMs);
+        f.reproducir(new CodificadorPista(fuente, preset), track, true);
+        return f;
+    }
+
+    private static FlujoEmisor tono(int tasa, int canales, Preset preset) {
+        return flujo(new FuenteTono(tasa, canales), preset, TONO, FlujoEmisor.OBJETIVO_ARCHIVOS_MS);
     }
 
     /** Llama a paso hasta que pida esperar; devuelve lo que pidió. */
-    private static long hastaEsperar(PipelineEmisor p) throws IOException {
+    private static long hastaEsperar(FlujoEmisor p) throws IOException {
         for (int i = 0; i < 100000; i++) {
             long espera = p.paso(0);
             if (espera != 0) {
@@ -171,7 +178,7 @@ public class PipelineEmisorTest {
 
     @Test
     public void empiezaConConfigYTrackYSeqCero() throws IOException {
-        PipelineEmisor p = tono(48000, 2, Preset.ALTA);
+        FlujoEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
         assertEquals(0, p.paso(0));
@@ -189,24 +196,24 @@ public class PipelineEmisorTest {
 
     @Test
     public void sinStateEnviaSoloHastaElObjetivo() throws IOException {
-        PipelineEmisor p = tono(48000, 2, Preset.ALTA);
+        FlujoEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
-        assertEquals(PipelineEmisor.ESPERA_LLENO_MS, hastaEsperar(p));
+        assertEquals(FlujoEmisor.ESPERA_LLENO_MS, hastaEsperar(p));
         // 94 bloques de 21,333 ms = 2005 ms: el primer nivel ≥ 2000.
         assertEquals(94, contar(con.nuevas(), Protocolo.AUDIO));
         assertEquals(2005, p.nivelEstimadoMs());
         assertEquals(93, p.seqEnviado());
         // Sin STATE nuevo no envía nada más, por más pasos que dé.
         for (int i = 0; i < 100; i++) {
-            assertEquals(PipelineEmisor.ESPERA_LLENO_MS, p.paso(0));
+            assertEquals(FlujoEmisor.ESPERA_LLENO_MS, p.paso(0));
         }
         assertEquals(0, contar(con.nuevas(), Protocolo.AUDIO));
     }
 
     @Test
     public void conStateRellenaLoQueSeReprodujo() throws IOException {
-        PipelineEmisor p = tono(48000, 2, Preset.ALTA);
+        FlujoEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
         hastaEsperar(p);
@@ -225,7 +232,7 @@ public class PipelineEmisorTest {
 
     @Test
     public void stateDeOtraConexionSeIgnora() throws IOException {
-        PipelineEmisor p = tono(48000, 2, Preset.NORMAL);
+        FlujoEmisor p = tono(48000, 2, Preset.NORMAL);
         Conexion vieja = new Conexion();
         p.conectar(vieja.escritor, vieja);
         for (int i = 0; i < 3; i++) {
@@ -253,53 +260,57 @@ public class PipelineEmisorTest {
 
     @Test
     public void trasVaciarIgnoraElStateViejo() throws IOException {
-        PipelineEmisor p = tono(48000, 2, Preset.ALTA);
+        FlujoEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
         hastaEsperar(p);
         con.estado = new Estado(1900, 0, 93, true);
         con.nuevas();
-        p.pedirVaciar();
+        p.reproducir(new CodificadorPista(new FuenteTono(48000, 2), Preset.ALTA), TONO, true);
         hastaEsperar(p);
         List<Trama> t = con.nuevas();
         assertEquals(Protocolo.CONTROL, t.get(0).tipo);
         assertEquals(Protocolo.CONTROL_VACIAR, t.get(0).payload[0]);
-        assertEquals("el primer bloque tras VACIAR sigue el seq", 94, t.get(1).seq());
+        assertEquals("mismo formato: sin CONFIG, solo TRACK", Protocolo.TRACK, t.get(1).tipo);
+        assertEquals("el primer bloque tras VACIAR sigue el seq", 94, t.get(2).seq());
         assertEquals("el STATE de antes del VACIAR no frena", 94, contar(t, Protocolo.AUDIO));
 
         con.estado = new Estado(1500, 0, 150, true); // ya posterior al corte (seq ≥ 94)
-        assertEquals(PipelineEmisor.ESPERA_LLENO_MS, p.paso(0));
+        assertEquals(FlujoEmisor.ESPERA_LLENO_MS, p.paso(0));
         assertEquals(1500 + p.config().msParaBloques(187 - 150), p.nivelEstimadoMs());
     }
 
     @Test
     public void detenerEnviaDetenerYTermina() throws IOException {
-        PipelineEmisor p = tono(48000, 2, Preset.ALTA);
+        FlujoEmisor p = tono(48000, 2, Preset.ALTA);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
         hastaEsperar(p);
         con.nuevas();
-        p.pedirDetener();
-        assertEquals(PipelineEmisor.FIN, p.paso(0));
-        assertEquals(PipelineEmisor.FIN, p.paso(0));
+        p.detener();
+        assertEquals(FlujoEmisor.FIN, p.paso(0));
+        assertEquals(FlujoEmisor.FIN, p.paso(0));
         List<Trama> t = con.nuevas();
         assertEquals(1, t.size());
         assertEquals(Protocolo.CONTROL, t.get(0).tipo);
         assertEquals(Protocolo.CONTROL_DETENER, t.get(0).payload[0]);
-        assertTrue(p.terminado());
+        assertTrue(p.detenido());
     }
 
     @Test
     public void fuenteFinitaRellenaElUltimoBloque() throws IOException {
         short[] senal = Senales.sintetica(2560, 1, 5); // 2,5 bloques
-        PipelineEmisor p = new PipelineEmisor(new FuenteTrozos(senal, 44100, 1, -1), Preset.NORMAL, null, 2000);
+        FlujoEmisor p = flujo(new FuenteTrozos(senal, 44100, 1, -1), Preset.NORMAL, null, 2000);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
-        assertEquals(PipelineEmisor.FIN, hastaEsperar(p));
+        assertEquals(FlujoEmisor.ESPERA_LLENO_MS, hastaEsperar(p));
+        assertTrue(p.terminado());
         List<Trama> t = con.nuevas();
         assertEquals(Protocolo.CONFIG, t.get(0).tipo);
         assertEquals("sin TRACK si es null", Protocolo.AUDIO, t.get(1).tipo);
         assertEquals(3, contar(t, Protocolo.AUDIO));
+        assertEquals("tras el último bloque, FIN", Protocolo.CONTROL, t.get(4).tipo);
+        assertEquals(Protocolo.CONTROL_FIN, t.get(4).payload[0]);
         // El último bloque: 512 muestras reales y el resto, ceros codificados.
         CodificadorIma cod = new CodificadorIma(1, 1024);
         byte[] esperado = new byte[cod.bytesBloque()];
@@ -312,7 +323,7 @@ public class PipelineEmisorTest {
 
     @Test
     public void sinDatosEsperaSinEnviar() throws IOException {
-        PipelineEmisor.Fuente vacia = new PipelineEmisor.Fuente() {
+        Fuente vacia = new Fuente() {
             @Override
             public int tasa() {
                 return 48000;
@@ -328,10 +339,10 @@ public class PipelineEmisorTest {
                 return 0;
             }
         };
-        PipelineEmisor p = new PipelineEmisor(vacia, Preset.ALTA, TONO, 500);
+        FlujoEmisor p = flujo(vacia, Preset.ALTA, TONO, 500);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
-        assertEquals(PipelineEmisor.ESPERA_SIN_DATOS_MS, p.paso(0));
+        assertEquals(FlujoEmisor.ESPERA_SIN_DATOS_MS, p.paso(0));
         assertEquals(0, contar(con.nuevas(), Protocolo.AUDIO));
     }
 
@@ -355,12 +366,12 @@ public class PipelineEmisorTest {
         }
     }
 
-    private static List<byte[]> bloques(PipelineEmisor.Fuente fuente, Preset preset) throws IOException {
-        PipelineEmisor p = new PipelineEmisor(fuente, preset, null, 1000000);
+    private static List<byte[]> bloques(Fuente fuente, Preset preset) throws IOException {
+        FlujoEmisor p = flujo(fuente, preset, null, 1000000);
         Conexion con = new Conexion();
         p.conectar(con.escritor, con);
-        for (int i = 0; i < 1000000 && p.paso(0) != PipelineEmisor.FIN; i++) {
-            // sigue
+        for (int i = 0; i < 1000000 && !p.terminado(); i++) {
+            p.paso(0);
         }
         List<byte[]> bloques = new ArrayList<byte[]>();
         for (Trama t : con.nuevas()) {
@@ -375,7 +386,7 @@ public class PipelineEmisorTest {
     @Test
     public void tonoDecodificadoTieneBuenaSnr() throws IOException {
         for (Preset preset : Preset.values()) {
-            PipelineEmisor p = tono(48000, 2, preset);
+            FlujoEmisor p = tono(48000, 2, preset);
             Config c = p.config();
             Conexion con = new Conexion();
             p.conectar(con.escritor, con);
@@ -398,5 +409,191 @@ public class PipelineEmisorTest {
                 assertTrue(Senales.snrTono(pcm, desde * 2 + 1, n, 2, c.sampleRate, 440) >= 20);
             }
         }
+    }
+
+    // --- Varias pistas.
+
+    private static CodificadorPista pista(int bloques, int tasa, int canales, Preset preset, long semilla) {
+        return new CodificadorPista(new FuenteTrozos(Senales.sintetica(bloques * 1024, canales, semilla), tasa,
+                canales, -1), preset);
+    }
+
+    private static List<Trama> soloTipo(List<Trama> tramas, int tipo) {
+        List<Trama> r = new ArrayList<Trama>();
+        for (Trama t : tramas) {
+            if (t.tipo == tipo) {
+                r.add(t);
+            }
+        }
+        return r;
+    }
+
+    private static final Track A = new Track("A", "x", 1000);
+    private static final Track B = new Track("B", "x", 1000);
+
+    /** Fin natural con la siguiente del mismo formato: sin VACIAR, FIN ni CONFIG; TRACK a tiempo. */
+    @Test
+    public void siguienteDelMismoFormatoSigueSinPausa() throws IOException {
+        FlujoEmisor f = new FlujoEmisor(100000); // sin freno: todo de una vez
+        f.reproducir(pista(10, 44100, 2, Preset.ALTA, 1), A, true);
+        f.siguiente(pista(10, 44100, 2, Preset.ALTA, 2), B);
+        Conexion con = new Conexion();
+        con.estado = new Estado(0, 0, Protocolo.SEQ_NINGUNO, false);
+        f.conectar(con.escritor, con);
+        for (int i = 0; i < 21; i++) { // 10 bloques de A, el cambio y 10 de B (sin llegar al fin de B)
+            f.paso(0);
+        }
+        List<Trama> t = con.nuevas();
+        assertEquals(1, contar(t, Protocolo.CONFIG));
+        assertEquals("solo el TRACK de A por ahora", 1, contar(t, Protocolo.TRACK));
+        assertEquals(0, contar(t, Protocolo.CONTROL));
+        List<Trama> audio = soloTipo(t, Protocolo.AUDIO);
+        assertEquals(20, audio.size());
+        for (int i = 0; i < 20; i++) {
+            assertEquals("seq continuo", i, audio.get(i).seq());
+        }
+        assertEquals(1, f.cambiosDePista());
+        assertTrue("todavía suena A", f.sonandoPrevia());
+
+        // El receptor recibió todo y le queda menos de un bloque de A: sale el TRACK de B.
+        con.estado = new Estado(f.config().msParaBloques(10), 0, 19, true);
+        f.paso(0);
+        t = con.nuevas();
+        assertEquals(Protocolo.TRACK, t.get(0).tipo);
+        assertTrue(!f.sonandoPrevia());
+    }
+
+    /** Fin natural con otro formato: FIN; espera dos STATE con el receptor vacío; CONFIG + TRACK + audio. */
+    @Test
+    public void siguienteDeOtroFormatoEsperaQueSueneElFinal() throws IOException {
+        FlujoEmisor f = new FlujoEmisor(100000);
+        f.reproducir(pista(5, 44100, 2, Preset.ALTA, 1), A, true);
+        f.siguiente(pista(5, 48000, 2, Preset.ALTA, 2), B);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        for (int i = 0; i < 20; i++) {
+            f.paso(0);
+        }
+        List<Trama> t = con.nuevas();
+        assertEquals(5, contar(t, Protocolo.AUDIO));
+        Trama ultima = t.get(t.size() - 1);
+        assertEquals(Protocolo.CONTROL, ultima.tipo);
+        assertEquals(Protocolo.CONTROL_FIN, ultima.payload[0]);
+
+        con.estado = new Estado(0, 0, 4, false); // un STATE vacío no alcanza
+        for (int i = 0; i < 5; i++) {
+            assertEquals(FlujoEmisor.ESPERA_LLENO_MS, f.paso(0));
+        }
+        assertEquals(0, con.nuevas().size());
+        con.estado = new Estado(0, 0, 4, false); // el segundo sí
+        f.paso(0);
+        t = con.nuevas();
+        assertEquals(Protocolo.CONFIG, t.get(0).tipo);
+        assertEquals(48000, t.get(0).config().sampleRate);
+        assertEquals(Protocolo.TRACK, t.get(1).tipo);
+        assertEquals(Protocolo.AUDIO, t.get(2).tipo);
+        assertEquals("el seq sigue", 5, t.get(2).seq());
+    }
+
+    @Test
+    public void finDeLaColaEsperaQueSueneYTermina() throws IOException {
+        FlujoEmisor f = new FlujoEmisor(100000);
+        f.reproducir(pista(3, 44100, 2, Preset.ALTA, 1), A, true);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        for (int i = 0; i < 10; i++) {
+            f.paso(0);
+        }
+        assertTrue(f.terminado());
+        assertEquals(FlujoEmisor.ESPERA_LLENO_MS, f.paso(0));
+        con.estado = new Estado(0, 0, 2, false);
+        f.paso(0);
+        con.estado = new Estado(0, 0, 2, false);
+        assertEquals("vacío dos veces: terminó", FlujoEmisor.FIN, f.paso(0));
+    }
+
+    /** Si la siguiente llega tarde (después del FIN), sigue igual: del mismo formato, sin CONFIG. */
+    @Test
+    public void siguienteQueLlegaDespuesDelFin() throws IOException {
+        FlujoEmisor f = new FlujoEmisor(100000);
+        f.reproducir(pista(3, 44100, 2, Preset.ALTA, 1), A, true);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        for (int i = 0; i < 10; i++) {
+            f.paso(0);
+        }
+        con.nuevas();
+        f.siguiente(pista(3, 44100, 2, Preset.ALTA, 2), B);
+        for (int i = 0; i < 10; i++) {
+            f.paso(0);
+        }
+        List<Trama> t = con.nuevas();
+        assertEquals(0, contar(t, Protocolo.CONFIG));
+        assertEquals(3, contar(t, Protocolo.AUDIO));
+        assertEquals(3, soloTipo(t, Protocolo.AUDIO).get(0).seq());
+    }
+
+    @Test
+    public void pausaSeReenviaAlReconectar() throws IOException {
+        FlujoEmisor f = tono(48000, 2, Preset.ALTA);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        hastaEsperar(f);
+        con.nuevas();
+        f.pausar();
+        f.paso(0);
+        List<Trama> t = con.nuevas();
+        assertEquals(Protocolo.CONTROL_PAUSA, t.get(0).payload[0]);
+        f.desconectar();
+        Conexion nueva = new Conexion();
+        f.conectar(nueva.escritor, nueva);
+        f.paso(0);
+        t = nueva.nuevas();
+        assertEquals("la pausa es por conexión: se repite", Protocolo.CONTROL, t.get(0).tipo);
+        assertEquals(Protocolo.CONTROL_PAUSA, t.get(0).payload[0]);
+        f.reanudar();
+        f.paso(0);
+        assertEquals(Protocolo.CONTROL_REANUDAR, nueva.nuevas().get(0).payload[0]);
+    }
+
+    /** El plazo de seguridad tras un FIN no corre mientras está en pausa. */
+    @Test
+    public void elPlazoTrasElFinNoCorreEnPausa() throws IOException {
+        FlujoEmisor f = new FlujoEmisor(100000);
+        f.reproducir(pista(3, 44100, 2, Preset.ALTA, 1), A, true);
+        f.siguiente(pista(3, 48000, 2, Preset.ALTA, 2), B);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        long t = 1000000000L;
+        for (int i = 0; i < 10; i++) {
+            f.paso(t);
+        }
+        con.nuevas();
+        f.pausar();
+        f.paso(t);
+        t += 60 * 1000000000L; // un minuto en pausa
+        assertEquals(FlujoEmisor.ESPERA_LLENO_MS, f.paso(t));
+        assertEquals("en pausa no pasa a la siguiente", 0, contar(con.nuevas(), Protocolo.CONFIG));
+        f.reanudar();
+        f.paso(t);
+        t += (f.config().msParaBloques(3) + FlujoEmisor.MARGEN_VACIO_MS + 10) * 1000000L;
+        f.paso(t);
+        assertEquals("sin STATE, pasa por plazo después de la pausa", 1, contar(con.nuevas(), Protocolo.CONFIG));
+    }
+
+    /** Un CONFIG que cambia el formato (el receptor vacía la cola) abre un corte del control de flujo. */
+    @Test
+    public void configDeOtroFormatoIgnoraElStateViejo() throws IOException {
+        FlujoEmisor f = tono(48000, 2, Preset.ALTA);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        hastaEsperar(f);
+        con.estado = new Estado(1900, 0, 93, true);
+        con.nuevas();
+        f.reproducir(new CodificadorPista(new FuenteTono(44100, 2), Preset.ALTA), TONO, true);
+        hastaEsperar(f);
+        List<Trama> t = con.nuevas();
+        assertEquals(1, contar(t, Protocolo.CONFIG));
+        assertTrue("con el STATE viejo ignorado, envía el objetivo entero", contar(t, Protocolo.AUDIO) >= 86);
     }
 }

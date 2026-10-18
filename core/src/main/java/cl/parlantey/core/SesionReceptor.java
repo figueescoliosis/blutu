@@ -200,6 +200,11 @@ public final class SesionReceptor {
                     cola.nuevaGeneracion(config);
                 }
                 break;
+            case Protocolo.CONTROL_FIN:
+                if (cola != null) {
+                    cola.marcarFin();
+                }
+                break;
             case Protocolo.CONTROL_DETENER:
                 config = null;
                 if (cola != null) {

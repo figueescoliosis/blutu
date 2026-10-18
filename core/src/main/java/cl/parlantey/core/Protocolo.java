@@ -12,8 +12,8 @@ public final class Protocolo {
     private Protocolo() {
     }
 
-    /** Versión del protocolo; viaja como primer byte del payload de HELLO. */
-    public static final int VERSION = 1;
+    /** Versión del protocolo; viaja como primer byte del payload de HELLO. v2: CONTROL FIN. */
+    public static final int VERSION = 2;
 
     /** UUID v4 del servicio RFCOMM. Generado una sola vez: no cambiar. */
     public static final UUID UUID_SERVICIO = UUID.fromString("c9cc3858-c5e1-46a3-9f9c-f1e94f108feb");
@@ -56,6 +56,8 @@ public final class Protocolo {
     public static final int CONTROL_REANUDAR = 2;
     public static final int CONTROL_VACIAR = 3;
     public static final int CONTROL_DETENER = 4;
+    /** v2: no viene más audio; el receptor reproduce lo encolado y se detiene sin contar corte. */
+    public static final int CONTROL_FIN = 5;
 
     /** Único códec de CONFIG. */
     public static final int CODEC_IMA_ADPCM = 1;

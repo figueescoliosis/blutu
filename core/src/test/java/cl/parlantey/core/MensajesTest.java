@@ -154,7 +154,7 @@ public class MensajesTest {
     @Test
     public void controlIdaYVuelta() throws IOException {
         int[] comandos = {Protocolo.CONTROL_PAUSA, Protocolo.CONTROL_REANUDAR, Protocolo.CONTROL_VACIAR,
-                Protocolo.CONTROL_DETENER, 0xFF};
+                Protocolo.CONTROL_DETENER, Protocolo.CONTROL_FIN, 0xFF};
         for (int c : comandos) {
             escritor.control(c);
         }

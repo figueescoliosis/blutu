@@ -181,7 +181,7 @@ public class SinAsignacionesTest {
         Reproductor reproductor = new Reproductor(cola, salida, 4000);
         java.io.SequenceInputStream entrada = new java.io.SequenceInputStream(
                 new java.io.ByteArrayInputStream(bytes.toByteArray(), 0, inicio), new Repetir(ciclo));
-        SesionReceptor sesion = new SesionReceptor(entrada, NULO, new Hello(1, 10, "x", 2, 4000), cola,
+        SesionReceptor sesion = new SesionReceptor(entrada, NULO, new Hello(Protocolo.VERSION, 10, "x", 2, 4000), cola,
                 reproductor, null, Reloj.SISTEMA);
         sesion.iniciar();
         long[] t = {System.nanoTime()};
@@ -219,13 +219,14 @@ public class SinAsignacionesTest {
     @Test
     public void pipelineDelEmisor() {
         // Objetivo enorme: el control de flujo nunca frena y cada paso arma y envía un bloque.
-        PipelineEmisor p = new PipelineEmisor(new FuenteTono(96000, 2), Preset.SEGURA, null, 0xFFFFFFFFL);
+        FlujoEmisor p = new FlujoEmisor(0xFFFFFFFFL);
+        p.reproducir(new CodificadorPista(new FuenteTono(96000, 2), Preset.SEGURA), null, true);
         p.conectar(new EscritorTramas(NULO), () -> null);
-        sinAsignar("PipelineEmisor.paso (96 kHz estéreo → 24 kHz mono)", 300, () -> {
+        sinAsignar("FlujoEmisor.paso (96 kHz estéreo → 24 kHz mono)", 300, () -> {
             try {
                 for (int i = 0; i < 300; i++) {
                     if (p.paso(0) != 0) {
-                        throw new AssertionError("el pipeline pidió esperar");
+                        throw new AssertionError("el flujo pidió esperar");
                     }
                 }
             } catch (IOException ex) {

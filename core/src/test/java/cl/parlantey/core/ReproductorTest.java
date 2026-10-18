@@ -528,4 +528,76 @@ public class ReproductorTest {
         }
         assertTrue("reaperturas en 10 s: " + r.erroresSalida(), r.erroresSalida() >= 3 && r.erroresSalida() <= 4);
     }
+
+    /** FIN: suena todo lo que queda, sin corte, y queda en espera («fin de la cola»). */
+    @Test
+    public void finSuenaLoQueQuedaSinCorte() {
+        arrancarEstereo();
+        cola.marcarFin();
+        correr(UMBRAL_ESTEREO * 22 + 500);
+        assertEquals(0, r.cortes());
+        assertEquals(0, salida.faltas);
+        assertTrue(r.finalizado());
+        assertFalse(r.reproduciendo());
+        assertEquals(Reproductor.LLENANDO, r.estado());
+        assertEquals(0, r.bufferMs());
+        assertTrue("sonó todo: " + salida.framesSonados, salida.framesSonados >= UMBRAL_ESTEREO * 1024L);
+    }
+
+    /** Con menos audio que el umbral (pista corta), FIN lo hace sonar igual: rellena con silencio. */
+    @Test
+    public void finConPocoAudioSuenaIgual() {
+        cola.nuevaGeneracion(ESTEREO);
+        encolar(ESTEREO, 5, 1000);
+        correr(300);
+        assertEquals("sin FIN espera el umbral", Reproductor.LLENANDO, r.estado());
+        assertEquals(0, salida.framesSonados);
+        cola.marcarFin();
+        correr(1000);
+        assertTrue("sonaron los 5 bloques: " + salida.framesSonados, salida.framesSonados >= 5 * 1024L);
+        assertTrue(r.finalizado());
+        assertEquals(0, r.cortes());
+    }
+
+    /** Un AUDIO después del FIN (otra pista sin pausa) lo anula: sigue sonando, sin corte. */
+    @Test
+    public void audioTrasFinSigueSinCorte() {
+        arrancarEstereo();
+        cola.marcarFin();
+        correr(500);
+        encolar(ESTEREO, 60, 1000);
+        correr(1500);
+        assertEquals(Reproductor.SONANDO, r.estado());
+        assertEquals(0, r.cortes());
+        assertFalse(r.finalizado());
+    }
+
+    /** FIN durante un corte: suena lo que quedó en la cola y termina. */
+    @Test
+    public void finDuranteUnCorte() {
+        arrancarEstereo();
+        correr(UMBRAL_ESTEREO * 22 + 200);
+        assertEquals(Reproductor.RELLENANDO, r.estado());
+        encolar(ESTEREO, 3, 1000);
+        cola.marcarFin();
+        correr(1000);
+        assertTrue(r.finalizado());
+        assertEquals(1, r.cortes());
+    }
+
+    /** Tras terminar con FIN, audio nuevo vuelve a llenar y suena (la salida quedó vaciada). */
+    @Test
+    public void audioDespuesDeTerminarVuelveASonar() {
+        arrancarEstereo();
+        cola.marcarFin();
+        correr(UMBRAL_ESTEREO * 22 + 500);
+        assertTrue(r.finalizado());
+        long antes = salida.framesSonados;
+        encolar(ESTEREO, UMBRAL_ESTEREO, 1000);
+        correr(500);
+        assertEquals(Reproductor.SONANDO, r.estado());
+        assertTrue(salida.framesSonados > antes);
+        assertFalse(r.finalizado());
+        assertEquals(0, r.cortes());
+    }
 }
