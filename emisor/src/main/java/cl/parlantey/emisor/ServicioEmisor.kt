@@ -251,11 +251,9 @@ class ServicioEmisor : Service() {
         p.registerCallback(
             object : MediaProjection.Callback() {
                 override fun onStop() {
-                    // «Dejar de compartir» desde el sistema (o se llamó a stop()).
-                    if (proyeccion === p) {
-                        supervisor?.comando(Comando.DetenerAudio)
-                        detenerCaptura()
-                    }
+                    // «Dejar de compartir» desde el sistema (o se llamó a stop()). Cerrar la cola de
+                    // esta captura basta: el envío de esa cola termina solo (y no toca otro audio).
+                    if (proyeccion === p) detenerCaptura()
                 }
             },
             principal,

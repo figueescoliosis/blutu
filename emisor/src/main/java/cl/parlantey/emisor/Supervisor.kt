@@ -355,6 +355,10 @@ class Supervisor(
                             if (!completa && control.errores() > 0) {
                                 publicar { it.copy(aviso = control.ultimoError()) }
                             }
+                            if (modo == Modo.CAPTURA) {
+                                // La cola de la captura se cerró: la detuvo Android o se cortó.
+                                publicar { it.copy(aviso = "Se dejó de enviar todo el audio (Android detuvo la captura).") }
+                            }
                             // Cierra el último archivo. Si terminó la cola, el receptor ya sonó todo
                             // y sigue mostrando «Fin de la cola»; si no, recibe DETENER.
                             if (completa) {

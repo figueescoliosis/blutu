@@ -70,6 +70,12 @@ class Captura @RequiresApi(29) constructor(proyeccion: MediaProjection) {
             grabador.release()
             return false
         }
+        if (grabador.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            // Puede negarse sin excepción.
+            error = "Android no dejó empezar la captura"
+            grabador.release()
+            return false
+        }
         activa = true
         hilo = Thread(::leer, "ParlanteY-captura").apply { start() }
         Log.i(Supervisor.TAG, "captura: ${grabador.sampleRate} Hz × ${grabador.channelCount}")
@@ -86,14 +92,16 @@ class Captura @RequiresApi(29) constructor(proyeccion: MediaProjection) {
                     error = "la captura se cortó ($n)"
                     Log.w(Supervisor.TAG, "AudioRecord.read = $n")
                 }
+                cola.cerrar() // el envío ve el fin y termina solo
                 break
             }
             if (n > 0) cola.escribir(buf, 0, n / CANALES)
         }
     }
 
-    /** Detiene y libera (idempotente). */
+    /** Detiene y libera (idempotente). La cola se cierra: el envío termina solo. */
     fun detener() {
+        cola.cerrar()
         if (!activa && hilo == null) return
         activa = false
         try {

@@ -18,7 +18,9 @@ package cl.parlantey.core;
  * exactamente a la misma velocidad y el buffer se va corriendo. Si el buffer (suavizado, ~1 s) se
  * aleja más de {@link #DERIVA_BANDA_MS} del objetivo, se descarta o duplica 1 frame por bloque
  * (~1 cada 1000) hasta volver a {@link #DERIVA_VUELTA_MS}. Si hay más que objetivo +
- * {@link #DERIVA_TOPE_MS} (p. ej. tras un corte del enlace), se descartan bloques enteros.
+ * {@link #DERIVA_TOPE_MS}, se descartan bloques enteros. Justo después de un corte (durante
+ * {@link #BLOQUES_TRAS_CORTE} bloques), el tope es el objetivo: lo que el enlace retuvo llega todo
+ * junto y ya es viejo; sin esto la latencia quedaría alta por minutos (la corrección fina es lenta).
  */
 public final class Reproductor {
 
@@ -47,6 +49,8 @@ public final class Reproductor {
     static final long DERIVA_BANDA_MS = 150;
     static final long DERIVA_VUELTA_MS = 100;
     static final long DERIVA_TOPE_MS = 400;
+    /** ≈ 3 s a 48 kHz. */
+    static final int BLOQUES_TRAS_CORTE = 150;
 
     /** Muestras (todos los canales) que caben en un bloque decodificado: los CONFIG con más se rechazan. */
     public static final int MAX_MUESTRAS_BLOQUE = Protocolo.MAX_CANALES * Protocolo.MUESTRAS_POR_BLOQUE;
@@ -97,6 +101,8 @@ public final class Reproductor {
     private long nivelSuavizadoX32 = -1;
     /** −1 descarta, +1 duplica, 0 nada. */
     private int correccion;
+    /** Bloques reales desde que terminó el último corte (en vivo); al empezar, como si fuera hace mucho. */
+    private int bloquesTrasCorte = BLOQUES_TRAS_CORTE;
 
     // --- Pedidos de otros hilos.
     private volatile boolean pausaPedida;
@@ -358,6 +364,7 @@ public final class Reproductor {
             marcarSilencioDelante(); // y el resto del bloque de silencio en curso no hace falta
             estado = SONANDO;
             framesDesdeArranque = 0; // lo pendiente es silencio: como un arranque
+            bloquesTrasCorte = 0;
         }
         if (porEscribir == null) {
             if (estado == SONANDO) {
@@ -393,7 +400,12 @@ public final class Reproductor {
                         }
                         nivelMs = config.msParaBloques(cola.enCola() + 1) + config.msParaFrames(pendiente);
                     }
-                    if (config.enVivo && nivelMs > config.bufferObjetivoMs + DERIVA_TOPE_MS) {
+                    if (bloquesTrasCorte < BLOQUES_TRAS_CORTE) {
+                        bloquesTrasCorte++;
+                    }
+                    long tope = config.bufferObjetivoMs
+                            + (bloquesTrasCorte < BLOQUES_TRAS_CORTE ? 0 : DERIVA_TOPE_MS);
+                    if (config.enVivo && nivelMs > tope) {
                         // Muy atrasado (llegó junto lo que el enlace retuvo): fuera un bloque entero.
                         cola.devolver(b);
                         bloquesDescartados++;

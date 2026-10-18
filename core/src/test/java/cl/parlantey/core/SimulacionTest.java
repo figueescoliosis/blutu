@@ -1137,10 +1137,11 @@ public class SimulacionTest {
         v.medirDesdeMs = v.ms;
         v.correr(30000);
         long objetivo = FlujoEmisor.OBJETIVO_EN_VIVO_MS;
-        assertTrue("buffer " + v.bufferMin + "–" + v.bufferMax + " (antes " + antes + ")",
-                v.bufferMax <= objetivo + Reproductor.DERIVA_TOPE_MS + 30);
+        assertTrue("buffer " + v.bufferMin + "–" + v.bufferMax + " (antes " + antes + "): lo retenido se descartó",
+                v.bufferMax <= objetivo + Reproductor.DERIVA_BANDA_MS + 30);
         long ahora = v.s.reproductor.bufferMs();
-        assertTrue("vuelve a la banda: " + ahora + " (antes " + antes + ")", ahora <= objetivo + Reproductor.DERIVA_BANDA_MS + 30);
+        assertTrue("en la banda: " + ahora + " (antes " + antes + ")", Math.abs(ahora - objetivo) <= Reproductor.DERIVA_BANDA_MS);
+        assertTrue("el receptor descartó lo viejo", v.s.reproductor.bloquesDescartados() > 0);
         assertTrue(v.s.reproductor.cortes() <= 1);
         System.out.printf("En vivo tras 3 s de corte: buffer antes %d, después %d–%d ms, %d ms descartados en la captura, %d bloques en el receptor%n",
                 antes, v.bufferMin, v.bufferMax, v.captura.msDescartados(), v.s.reproductor.bloquesDescartados());
