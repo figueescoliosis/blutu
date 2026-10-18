@@ -345,3 +345,64 @@ Versiones: receptor 0.3.0 y emisor 0.3.0 (protocolo v2), release v0.3.0.
 | ⑥ Apagar y encender el Bluetooth del emisor con música: vuelve desde donde iba | [PENDIENTE] |
 
 Tabla de «Copiar para NOTAS (Fase 3)»: [PENDIENTE]
+
+## Fase 4 — emisor modo «Todo el audio»
+
+### Verificación sin dispositivo (contenedor Linux, 2026-10-18)
+
+Protocolo **v3** (CONFIG con `flags` bit 0 = en vivo, PROTOCOLO.md). Receptor y emisor 0.4.0: la 0.3.0 no conecta con la 0.4.0 (BYE 1).
+
+**Tests JVM de `core`: 196, todos en verde.** Lo nuevo:
+
+| Test | Qué comprueba |
+|---|---|
+| `ColaCapturaTest` | entrega en orden sin bloquear; llena, descarta lo más antiguo (también más que la capacidad de una vez); vaciar, cerrar (FIN) y pico de señal |
+| `MensajesTest` | CONFIG en vivo byte a byte (flag en la cabecera, mismo payload) y de ida y vuelta |
+| `ReproductorTest` (en vivo) | dentro de la banda no corrige; con de más descarta frames hasta volver y para; con el emisor 0,05 % más lento duplica; sin en vivo nunca corrige; muy atrasado descarta bloques |
+| `SinAsignacionesTest` | ciclo del receptor en vivo con la compensación activa: 0 bytes |
+| `SimulacionTest` (en vivo) | ver abajo |
+
+**Simulación de captura** (emisor + receptor completos, enlace de 165 KB/s, captura de a 10 ms con su propio reloj, objetivo 500 ms). La latencia es la exacta: lo capturado que todavía no sonó.
+
+| Escenario | Resultado |
+|---|---|
+| 30 min, emisor 0,05 % más rápido que el receptor | 0 cortes, 0 descartes; buffer 448–685 ms, **latencia 460–697 ms**; 30 593 frames descartados por la compensación (deriva: 43 200) |
+| 30 min, emisor 0,05 % más lento | 0 cortes, 0 descartes; buffer 338–423 ms, **latencia 361–443 ms**; 44 595 frames duplicados (deriva: 43 200) |
+| Enlace cortado 3 s | 1 corte; la captura descarta 2,4 s viejos; el receptor descarta lo que llega retenido (20 bloques) y vuelve a **469–512 ms** |
+
+**Pruebas de mutación:** 10 errores introducidos en la compensación de deriva, el flag, el emisor en vivo y `ColaCaptura`: **los 10 detectados**.
+
+**Revisión adversarial** del flujo de captura:
+- **Confirmado:**
+  - el orden de Android 14+ (consentimiento → `startForeground` connectedDevice|mediaProjection → `getMediaProjection` → `registerCallback` → `AudioRecord`);
+  - no hace falta `FOREGROUND_SERVICE_MICROPHONE`: la captura de reproducción es una fuente virtual;
+  - cada toque pide un consentimiento nuevo.
+- **Corregido:**
+  - la latencia quedaba ~150 ms alta por minutos tras un corte breve;
+  - una captura muerta seguía «enviando» (ahora la cola se cierra y el envío termina con aviso);
+  - «Dejar de compartir» podía detener la música recién elegida;
+  - `startRecording` que no graba no se detectaba.
+
+**Lint, APK y SDK real:**
+- Lint de core, receptor y emisor: 0 avisos.
+- `./gradlew :receptor:verificarApk` OK; dependencias del receptor: solo `project ':core'`.
+- `verificar_api.py` contra API 10: 205 referencias, **0 faltantes**.
+- Firma v1 válida. APK del receptor: 154 054 bytes.
+
+### Pruebas en los teléfonos
+
+Versiones: receptor 0.4.0 y emisor 0.4.0 (protocolo v3), release v0.4.0.
+
+| Prueba | Resultado |
+|---|---|
+| ① 30 min de captura (YouTube o Spotify) con latencia estable; cortes | [PENDIENTE] |
+| ② Bajar el volumen del emisor: ¿la captura baja? (depende del fabricante) | [PENDIENTE] |
+| ③ Qué apps llegan en silencio | [PENDIENTE] |
+| ④ Con la pantalla del emisor bloqueada: ¿sigue la captura? | [PENDIENTE] |
+| ⑤ En el diálogo de Android aparece «Pantalla completa» (no «una app») | [PENDIENTE] |
+| ⑥ Deriva en el receptor tras 30 min (línea «formato» de la pantalla: «en vivo ±N») | [PENDIENTE] |
+| ⑦ `getMinBufferSize` del Galaxy Y (logcat, línea «minuto»): si 4 × es > ~650 ms, el buffer no entra en la banda | [PENDIENTE] |
+
+Tabla de «Copiar para NOTAS (Fase 4)»: [PENDIENTE]
+
+Las pruebas de la Fase 3 en los teléfonos (arriba) siguen pendientes: se hacen con esta misma versión.
