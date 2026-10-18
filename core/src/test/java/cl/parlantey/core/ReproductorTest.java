@@ -449,19 +449,21 @@ public class ReproductorTest {
         encolar(ESTEREO, UMBRAL_ESTEREO, 1000);
         pasos();
         assertEquals(Reproductor.SONANDO, r.estado());
+        // Suena parte del silencio que quedó en la salida y detrás entran los primeros bloques reales.
+        correr(50);
         long enCola = ESTEREO.msParaBloques(cola.enCola());
         long real = r.bufferMs() - enCola;
-        assertTrue("audio real pendiente " + real + " ms (sin el silencio de la salida)", real <= 2 * 22);
+        assertTrue("audio real pendiente " + real + " ms (sin el silencio de la salida)", real <= 3 * 22);
     }
 
     /**
      * Con la latencia real de un hilo (despierta cuando vence la espera o llega un bloque, más
-     * unos ms), el corte se declara con ~1 bloque real todavía en la salida: el silencio entra a
-     * tiempo y AudioFlinger no queda sin datos.
+     * 15 ms), el corte se declara con ~1 bloque real (21 ms) todavía en la salida: el silencio entra
+     * a tiempo y AudioFlinger no queda sin datos.
      */
     @Test
     public void corteConLatenciaDelHiloSinFaltas() {
-        nuevo(new SalidaFalsa(C, 1024, 0, 0));
+        nuevo(new SalidaFalsa(C, 256, 0, 0)); // el mezclador consume cada 5,3 ms
         arrancarEstereo();
         long despertar = 0;
         for (int i = 0; i < 4000; i++) {
@@ -472,7 +474,7 @@ public class ReproductorTest {
                 for (int k = 0; k < 1000 && espera == 0; k++) {
                     espera = r.paso(t);
                 }
-                despertar = t + (espera + 8) * MS; // 8 ms de demora del planificador
+                despertar = t + (espera + 15) * MS; // 15 ms de demora del planificador
             }
         }
         assertEquals(1, r.cortes());

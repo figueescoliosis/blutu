@@ -163,15 +163,16 @@ Total: **84 tests JVM, 0 fallas** (`./gradlew :core:testDebugUnitTest`). Corren 
 
 ### Verificación sin dispositivo (contenedor Linux, 2026-10-17)
 
-**Tests JVM:** `./gradlew :core:testDebugUnitTest` → **135 tests, 0 fallas** (~7 s).
+**Tests JVM:** `./gradlew :core:testDebugUnitTest` → **154 tests, 0 fallas** (~10 s; los de tiempo real, repetidos 3 veces seguidas sin fallas).
 
 | Test | Qué prueba |
 |---|---|
-| `SimulacionTest` | Emisor y receptor completos en un hilo con tiempo virtual (pasos de 1 ms) y un enlace simulado como el medido en la Fase 0: 165 KB/s y 1,5 MB de buffer en el socket del emisor. La salida imita al AudioTrack de 2.3 (no suena hasta llenarse; posición de a 1024 frames). |
-| `ReproductorTest` | Estados del reproductor contra una `SalidaFalsa` con la semántica de 2.3: no escribe sin CONFIG, llenando ni en pausa; umbral de arranque con el buffer de la salida; un corte largo es un solo corte; VACIAR no deja sonar nada viejo; CONFIG mono tras estéreo recrea la salida; escrituras parciales exactas; salida rota → se reabre; `abrir` fallido → reintento cada 1 s; `bufferMs` con la posición dando la vuelta en 2³¹. |
+| `SimulacionTest` | Emisor y receptor completos en un hilo con tiempo virtual (pasos de 1 ms) y un enlace simulado como el medido en la Fase 0: 165 KB/s y 1,5 MB de buffer en el socket del emisor. La salida imita al AudioTrack de 2.3 (no suena hasta llenarse; posición de a 1024 frames). Incluye reconexiones con la misma cola y el mismo reproductor, como en el servicio. |
+| `ReproductorTest` | Estados del reproductor contra una `SalidaFalsa` con la semántica de 2.3: no escribe sin CONFIG, llenando ni en pausa; umbral de arranque con el buffer de la salida; un corte largo es un solo corte; VACIAR no deja sonar nada viejo; CONFIG mono tras estéreo recrea la salida; escrituras parciales exactas; salida rota, trabada o recreada por dentro → se reabre (una pausa larga no); `abrir` fallido → reintento cada 1 s y `bufferMs` igual cuenta la cola; `bufferMs` con la posición dando la vuelta en 2³¹; corte → pausa → reanudar sin contar el silencio; corte sin faltas con 15 ms de demora del hilo. |
 | `PipelineEmisorTest` | Formato de cada preset (también 96 y 192 kHz, 5.1 y mono); CONFIG + TRACK + seq 0; control de flujo sin STATE (se detiene en 94 bloques = 2005 ms), con STATE, con un STATE de otra conexión y tras VACIAR; DETENER; último bloque rellenado; trozos de largo irregular → bloques idénticos; SNR del tono decodificado ≥ 20 dB en los tres presets. |
 | `PuntaAPuntaTest` | Hilos y sockets TCP reales, como en las apps (red, STATE y audio en el receptor; lector y pipeline en el emisor): 3 s de tono → 440 Hz limpio (SNR ≥ 20 dB), STATE llegando, 0 cortes; AUDIO de largo incorrecto → BYE(2). |
-| `SesionTest` | `SesionEmisor` asíncrona: STATE intercalado con PONG y TEST_RESULT, watchdog de 4 s con reloj virtual, BYE durante la espera, cerrar desbloquea al lector. |
+| `SesionTest` | `SesionEmisor` asíncrona: STATE intercalado con PONG y TEST_RESULT, watchdog de 4 s con reloj virtual, BYE durante la espera, cerrar desbloquea al lector y despierta a quien espera aunque la lectura siga bloqueada. |
+| `SesionReceptorTest` | Cada trama sobre la cola y el reproductor: AUDIO sin CONFIG (cuenta para `ultimoSeq`), pool agotado, CONFIG del mismo formato no vacía, VACIAR conserva el CONFIG, PAUSA/REANUDAR, DETENER quita la pausa, CONFIG que no cabe al decodificar → BYE(2), una conexión nueva no hereda pausa ni seq, el primer STATE espera a que las métricas estén en cero. |
 | `ColaBloquesTest` | Orden, pool agotado, generaciones (un VACIAR durante un paso del hilo de audio no pierde ni deja sonar bloques), 20 000 operaciones al azar sin perder ni duplicar bloques. |
 | `SinAsignacionesTest` | 0 bytes asignados en el ciclo completo del receptor (red → cola → decodificar → escribir → STATE, con PING y VACIAR intercalados) y en el pipeline del emisor (96 kHz estéreo → Segura). |
 
@@ -186,12 +187,13 @@ Además:
 - Enlace detenido 1 s → 0 cortes. Detenido 3 s → exactamente 1 corte, se recupera solo y el nivel no pasa de 2022 ms.
 - VACIAR → no suena nada de antes y no cuenta corte. DETENER → la salida se libera y la conexión sigue viva con los PING; un tono nuevo en la misma conexión sigue la numeración de seq.
 - Emisor mudo → el receptor cierra entre 5000 y 5001 ms después de la última trama; 4,5 s de silencio no lo cierran.
+- Reconexión tras una PAUSA y un corte: el primer STATE trae `ultimoSeq` = `0xFFFFFFFF` y 0 cortes, vuelve a sonar y el buffer no pasa de 2100 ms, también con dos reconexiones seguidas.
 
 **Cambio en los tests:** ya no corren con `-Xint` sino con `-XX:-DoEscapeAnalysis -XX:-EliminateAllocations` (core/build.gradle.kts). Con el intérprete, la simulación de 10 minutos tardaba demasiado. Sin escape analysis el JIT ya no puede eliminar asignaciones que Dalvik sí haría. Un control nuevo lo comprueba: mide 10 000 objetos locales que no salen del método. Con estas opciones los ve; con el escape analysis activo mide 0 bytes y el control falla (se probó).
 
 **Pruebas de mutación** (en una copia aparte del repo; cada error se introduce solo y se corre toda la suite):
 - Primera ronda, sobre el código inicial: 12 errores (corte por cada bloque de silencio, VACIAR que no suelta el bloque en curso, escribir más de lo que cabe, STATE previo al corte, seq que vuelve a 0 en la conexión, AUDIO sin CONFIG que no actualiza `ultimoSeq`, watchdog de 50 s, silencio contado en `bufferMs`, una asignación en el decodificador, pausa que no detiene las escrituras, `sacar` que ignora la generación, STATE que no se cuentan). Se detectaron 11; el que faltaba (`ultimoSeq` sin CONFIG) llevó a `SesionReceptorTest`. La ronda también destapó un test inestable que era un defecto real: `esperarEstado` perdía un STATE llegado justo antes de la llamada (ahora `esperarEstadoTras`).
-- Segunda ronda, sobre los arreglos de la revisión: [PENDIENTE]
+- Segunda ronda, sobre los arreglos de la revisión: 12 errores (cada arreglo revertido). Se detectaron 9; para dos se afinaron los tests (el de reanudar tras un corte medía antes de que entrara audio real; el del margen del corte necesitaba consumo cada 5,3 ms y 15 ms de demora del hilo) y ahora se detectan: **11 de 12**. El que queda es el orden entre poner las métricas en cero y avisarlo: una carrera entre hilos que un test determinista no puede provocar; se revisó a mano.
 
 **Revisión adversarial** (tres revisores independientes: core, receptor en 2.3, emisor en Android 14–16). Ninguno encontró algo que haga caer las apps; el criterio ② se siguió paso a paso y funciona. Se corrigieron, con tests:
 - Receptor y core:
@@ -218,7 +220,8 @@ Además:
 **Lint, APK y SDK real:**
 - Lint sin problemas en core, receptor y emisor.
 - `./gradlew :receptor:verificarApk`: firma v1 válida para minSdk 9, dex 035, sin Kotlin ni AndroidX.
-- `herramientas/verificar_api.py` contra API 10: 201 referencias externas y 70 tipos del framework, **0 faltantes**. Contra API 9 falta solo el socket insecure, protegido con `SDK_INT >= 10`.
+- `herramientas/verificar_api.py` contra API 10: 204 referencias externas y 71 tipos del framework, **0 faltantes**. Contra API 9 falta solo el socket insecure, protegido con `SDK_INT >= 10`.
+- APK del receptor: 131 969 bytes.
 - Dependencias del receptor (`debugRuntimeClasspath` y `releaseRuntimeClasspath`): solo `project ':core'`.
 
 ### Pruebas en los teléfonos — [PENDIENTE]
