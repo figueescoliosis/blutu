@@ -1,4 +1,4 @@
-# Protocolo ParlanteY — versión 2
+# Protocolo ParlanteY — versión 3
 
 Fuente de verdad del protocolo entre el **emisor** (Android 8+) y el **receptor** (Galaxy Y, Android 2.3).
 Todo cambio exige: actualizar este archivo + los tests de `core` + `Protocolo.VERSION` (y el historial al final).
@@ -9,7 +9,7 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 - Códec: `ImaAdpcm`, `CodificadorIma`.
 - Sesiones: `SesionEmisor`, `SesionReceptor`.
 - Reproducción (receptor): `ColaBloques`, `Reproductor`, `Salida`.
-- Envío (emisor): `FlujoEmisor` (tramas de una conexión, pista tras pista), `CodificadorPista` (una `Fuente` → bloques), `ControlCola` (la cola: abrir, siguiente, anterior, pausa, reconexión), `FuenteTono`, `Preset`.
+- Envío (emisor): `FlujoEmisor` (tramas de una conexión, pista tras pista), `CodificadorPista` (una `Fuente` → bloques), `ControlCola` (la cola: abrir, siguiente, anterior, pausa, reconexión), `FuenteTono`, `ColaCaptura` (captura en vivo), `Preset`.
 
 ## Estado de implementación
 
@@ -56,6 +56,7 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 - **Tipo desconocido → leer el payload y descartarlo** (compatibilidad hacia adelante).
 - Payload más corto de lo que el tipo exige → error de protocolo → cerrar la conexión.
 - El formato de la cabecera es fijo en todas las versiones.
+- **`flags`:** bit 0 de TEST_DATA = última trama de la prueba; bit 0 de CONFIG = en vivo (v3). En los demás tipos vale 0. Un bit desconocido se ignora.
 
 ## 4. Sesión
 
@@ -117,8 +118,16 @@ Payload de 12 bytes:
 | muestrasPorBloque | u16 | par, ≥ 2, y el AUDIO resultante debe caber en 64 KiB. El emisor usa **1024**. |
 | bufferObjetivoMs | u32 | nivel de buffer que debe mantener el receptor (Archivos 2000 ms, Todo el audio 500 ms) |
 
+- **`flags` bit 0 = en vivo (v3)** (`Protocolo.FLAG_EN_VIVO`): el audio es una captura que no se puede adelantar ni atrasar. El receptor compensa la deriva de reloj (ver abajo). Sin el bit (archivos, tono), no.
 - Un valor fuera de rango es error de protocolo: BYE(2) y cierre.
-- Cada CONFIG nuevo reemplaza al anterior. Si cambian la tasa o los canales, el receptor vacía la cola y recrea `AudioTrack`.
+- Cada CONFIG nuevo reemplaza al anterior. Si cambian la tasa o los canales, el receptor vacía la cola y recrea `AudioTrack`. Si solo cambian el objetivo o el bit en vivo, sigue sonando con los valores nuevos.
+
+**Compensación de deriva (en vivo).** El reloj de la captura y el de la salida del receptor no van exactamente iguales (±50 ppm es común), así que el buffer se corre solo. El receptor, ya con la salida llena una vez:
+- mide el nivel (bloques en cola + audio real pendiente en `AudioTrack`) antes de cada bloque y lo suaviza (≈ 0,7 s);
+- si se aleja más de **150 ms** de `bufferObjetivoMs`, descarta (nivel alto) o duplica (nivel bajo) el último frame de cada bloque de 1024 (≈ 1 frame cada 1000, 0,1 %, inaudible) hasta volver a **100 ms** del objetivo;
+- si el nivel supera el objetivo + **400 ms** (llegó junto lo que el enlace retuvo), descarta bloques enteros hasta bajar de ahí.
+
+**Emisor en vivo.** Envía apenas tiene un bloque, mientras el nivel estimado sea menor que el objetivo + 400 ms. El control de flujo no frena antes, para no tapar la deriva que el receptor corrige. Si el enlace se atrasa y llega a ese tope, lo capturado espera como mucho 250 ms (`ColaCaptura`); más, se descarta lo más antiguo: la latencia no crece.
 
 ### 0x03 AUDIO (E→R)
 
@@ -269,3 +278,4 @@ Con la regla del 70 %, la prueba de enlace debe medir al menos:
 | 1 | 2026-10-17 | Precisiones de la Fase 2, sin cambios de formato: STATE cada 250 ms desde el HELLO; PING cada 1 s siempre; watchdogs de 5 s (receptor) y 4 s (emisor); fin de conexión = DETENER; seq por conexión; `ultimoSeq` cuenta los AUDIO descartados; VACIAR = `pause()` + `flush()` y conserva la pausa; umbral de arranque; `bufferMs` sin el silencio de relleno; definición de corte; control de flujo con `seqCorte`. |
 | 1 | 2026-10-18 | Tras la revisión de la Fase 2, sin cambios de formato: pausa, `ultimoSeq` y `cortes` son por conexión (también en el primer STATE); DETENER quita la pausa; se quita la regla de "más bloques en vuelo que la capacidad", que nunca cambiaba el resultado. |
 | 2 | 2026-10-18 | Fase 3: **CONTROL 5 = FIN** (sonar lo que queda y detenerse sin contar corte). Cambios de pista: pedido (VACIAR → TRACK → CONFIG → AUDIO), fin natural con el mismo formato (sin pausa, TRACK cuando suena) y con otro formato (FIN, esperar el receptor vacío, TRACK → CONFIG → AUDIO); TRACK va antes que CONFIG. Un receptor v1 y un emisor v2 (o al revés) no conectan: BYE(1). |
+| 3 | 2026-10-18 | Fase 4: **CONFIG con `flags` bit 0 = en vivo**; compensación de deriva en el receptor (±150 ms → 1 frame por bloque, hasta ±100 ms; sobre objetivo + 400 ms, bloques enteros); emisor en vivo hasta objetivo + 400 ms y captura acotada a 250 ms. Receptor v2 y emisor v3 (o al revés) no conectan: BYE(1). |
