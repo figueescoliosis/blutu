@@ -7,6 +7,8 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import android.os.CancellationSignal
+import android.os.OperationCanceledException
 import android.util.Log
 import cl.parlantey.core.ControlCola
 import cl.parlantey.core.Fuente
@@ -43,6 +45,8 @@ class AperturaArchivo(
     @Volatile private var cerrada = false
     @Volatile private var lista = false
     @Volatile private var error: String? = null
+    /** Corta una apertura lenta (p. ej. un archivo en la nube que se está bajando) al cerrar. */
+    private val cancelar = CancellationSignal()
 
     private var afd: AssetFileDescriptor? = null
     private var extractor: MediaExtractor? = null
@@ -88,37 +92,44 @@ class AperturaArchivo(
         synchronized(cerrojo) {
             if (cerrada) return
             cerrada = true
+            cancelar.cancel()
             if (!abriendo) liberar() // si no, libera la tarea de apertura al terminar
         }
     }
 
     private fun abrir() {
-        var falla: String? = null
+        var falla: String? = "no se pudo abrir"
         try {
-            abrirDecodificador()
-        } catch (e: Exception) {
+            if (!cerrada) abrirDecodificador()
+            falla = null
+        } catch (e: Throwable) {
             if (!cerrada) Log.w(Supervisor.TAG, "no se pudo abrir $uri", e)
             falla = when (e) {
                 is SecurityException -> "sin permiso para leerlo (vuelve a agregarlo)"
                 is IOException -> e.message ?: "no se pudo leer"
+                is OperationCanceledException -> "cancelada"
                 else -> "el teléfono no lo puede decodificar (${e.javaClass.simpleName})"
             }
-        }
-        synchronized(cerrojo) {
-            abriendo = false
-            if (falla != null) {
-                error = falla
-                liberar()
-            } else if (cerrada) {
-                liberar()
+        } finally {
+            // Siempre: si no, ControlCola esperaría esta apertura para siempre.
+            synchronized(cerrojo) {
+                abriendo = false
+                if (falla != null) {
+                    error = falla
+                    liberar()
+                } else if (cerrada) {
+                    liberar()
+                }
+                lista = true
             }
-            lista = true
         }
     }
 
     private fun abrirDecodificador() {
-        val d = contexto.contentResolver.openAssetFileDescriptor(uri, "r") ?: throw IOException("no se pudo abrir")
+        val d = contexto.contentResolver.openAssetFileDescriptor(uri, "r", cancelar)
+            ?: throw IOException("no se pudo abrir")
         afd = d
+        if (cerrada) return
         val ex = MediaExtractor()
         extractor = ex
         ex.setDataSource(d)
@@ -126,6 +137,7 @@ class AperturaArchivo(
             ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
         } ?: throw IOException("no tiene audio")
         ex.selectTrack(pista)
+        if (cerrada) return
         val formato = ex.getTrackFormat(pista)
         val mime = formato.getString(MediaFormat.KEY_MIME)!!
         val c = try {
@@ -154,10 +166,7 @@ class AperturaArchivo(
     }
 
     private fun liberar() {
-        try {
-            codec?.stop()
-        } catch (_: Exception) {
-        }
+        // Sin stop(): release() basta y no frena al hilo de E/S en el cambio de pista.
         try {
             codec?.release()
         } catch (_: Exception) {
@@ -238,8 +247,10 @@ class AperturaArchivo(
             if (!conDatos) formatoDeSalida(c.getOutputFormat(o))
             val buf = c.getOutputBuffer(o)
             if (buf != null && !finSalidaPorFormato) {
-                conDatos = true
+                val antes = pcmFin
                 convertir(buf, info)
+                // Lo que el seek descarta no fija el formato: puede cambiar todavía.
+                if (pcmFin != antes) conDatos = true
             }
         }
         c.releaseOutputBuffer(o, false)
@@ -297,7 +308,8 @@ class AperturaArchivo(
             AudioFormat.ENCODING_PCM_FLOAT -> {
                 val f = datos.asFloatBuffer()
                 for (i in desde until desde + n) {
-                    pcm[o++] = (f.get(i) * 32767f).roundToInt().coerceIn(-32768, 32767).toShort()
+                    val v = f.get(i)
+                    pcm[o++] = if (v.isNaN()) 0 else (v * 32767f).coerceIn(-32768f, 32767f).roundToInt().toShort()
                 }
             }
             AudioFormat.ENCODING_PCM_32BIT -> {
