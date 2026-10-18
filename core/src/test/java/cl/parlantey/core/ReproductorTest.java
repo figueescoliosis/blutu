@@ -600,4 +600,84 @@ public class ReproductorTest {
         assertFalse(r.finalizado());
         assertEquals(0, r.cortes());
     }
+
+    // --- En vivo: compensación de deriva.
+
+    private static final Config VIVO = Config.imaAdpcm(48000, 2, 500, true);
+    private static final Config NO_VIVO = Config.imaAdpcm(48000, 2, 500, false);
+    private double alimentados;
+
+    /** Corre {@code ms} encolando bloques a {@code factor} × el ritmo con que suena la salida. */
+    private void correrAlimentando(Config c, long ms, double factor) {
+        for (long i = 0; i < ms; i++) {
+            alimentados += c.sampleRate / 1000.0 * factor;
+            while (alimentados >= c.muestrasPorBloque) {
+                alimentados -= c.muestrasPorBloque;
+                encolar(c, 1, 1000);
+            }
+            correr(1);
+        }
+    }
+
+    private void arrancarCon(Config c, int bloques) {
+        cola.nuevaGeneracion(c);
+        encolar(c, bloques, 1000);
+        pasos();
+        assertEquals(Reproductor.SONANDO, r.estado());
+    }
+
+    @Test
+    public void enVivoDentroDeLaBandaNoCorrige() {
+        arrancarCon(VIVO, 24); // ≈ 512 ms
+        correrAlimentando(VIVO, 20000, 1.0);
+        assertEquals(0, r.framesDescartados());
+        assertEquals(0, r.framesDuplicados());
+        assertEquals(0, r.cortes());
+    }
+
+    @Test
+    public void enVivoConDeMasDescartaHastaVolver() {
+        arrancarCon(VIVO, 33); // ≈ 700 ms: 200 por encima
+        correrAlimentando(VIVO, 5000, 1.0);
+        assertTrue("descarta", r.framesDescartados() > 100);
+        assertEquals(0, r.framesDuplicados());
+        assertTrue(r.bufferMs() < 700);
+        correrAlimentando(VIVO, 120000, 1.0);
+        long d = r.framesDescartados();
+        assertTrue("volvió a la banda: " + r.bufferMs(), r.bufferMs() < 500 + Reproductor.DERIVA_VUELTA_MS + 30);
+        correrAlimentando(VIVO, 20000, 1.0);
+        assertEquals("y deja de corregir", d, r.framesDescartados());
+        assertEquals(0, r.cortes());
+        assertEquals(0, r.bloquesDescartados());
+    }
+
+    @Test
+    public void enVivoConPocoDuplica() {
+        arrancarCon(VIVO, 18); // ≈ 384 ms, cerca del borde de abajo
+        correrAlimentando(VIVO, 120000, 0.9995); // el emisor va 0,05 % más lento: −0,5 ms por segundo
+        assertTrue("duplica: " + r.framesDuplicados(), r.framesDuplicados() > 500);
+        assertEquals(0, r.framesDescartados());
+        assertEquals(0, r.cortes());
+        assertTrue("dentro de la banda: " + r.bufferMs(), r.bufferMs() > 500 - Reproductor.DERIVA_BANDA_MS - 40);
+    }
+
+    @Test
+    public void sinEnVivoNoCorrige() {
+        arrancarCon(NO_VIVO, 40);
+        correrAlimentando(NO_VIVO, 20000, 1.0);
+        assertEquals(0, r.framesDescartados());
+        assertEquals(0, r.framesDuplicados());
+        assertEquals(0, r.bloquesDescartados());
+    }
+
+    @Test
+    public void enVivoMuyAtrasadoDescartaBloques() {
+        arrancarCon(VIVO, 24);
+        correrAlimentando(VIVO, 2000, 1.0);
+        encolar(VIVO, 40, 1000); // llega de golpe lo que retuvo el enlace (~850 ms)
+        correrAlimentando(VIVO, 1000, 1.0);
+        assertTrue(r.bloquesDescartados() > 0);
+        assertTrue("vuelve bajo el tope: " + r.bufferMs(), r.bufferMs() <= 500 + Reproductor.DERIVA_TOPE_MS + 30);
+        assertEquals(0, r.cortes());
+    }
 }

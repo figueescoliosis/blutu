@@ -12,8 +12,11 @@ public final class Protocolo {
     private Protocolo() {
     }
 
-    /** Versión del protocolo; viaja como primer byte del payload de HELLO. v2: CONTROL FIN. */
-    public static final int VERSION = 2;
+    /**
+     * Versión del protocolo; viaja como primer byte del payload de HELLO. v2: CONTROL FIN. v3: CONFIG
+     * en vivo ({@link #FLAG_EN_VIVO}).
+     */
+    public static final int VERSION = 3;
 
     /** UUID v4 del servicio RFCOMM. Generado una sola vez: no cambiar. */
     public static final UUID UUID_SERVICIO = UUID.fromString("c9cc3858-c5e1-46a3-9f9c-f1e94f108feb");
@@ -45,6 +48,11 @@ public final class Protocolo {
 
     /** Bit 0 de {@code flags} en TEST_DATA: última trama de la prueba. */
     public static final int FLAG_ULTIMA = 0x01;
+    /**
+     * Bit 0 de {@code flags} en CONFIG (v3): audio en vivo (captura). El receptor compensa la deriva
+     * de reloj alrededor de bufferObjetivoMs.
+     */
+    public static final int FLAG_EN_VIVO = 0x01;
 
     // Códigos de BYE.
     public static final int BYE_NORMAL = 0;

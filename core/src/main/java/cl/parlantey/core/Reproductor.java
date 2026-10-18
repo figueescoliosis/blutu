@@ -13,6 +13,12 @@ package cl.parlantey.core;
  * <li>RELLENANDO: escribe silencio de a un bloque (la salida sigue sonando) hasta volver al umbral.</li>
  * </ul>
  * VACIAR, DETENER, un CONFIG nuevo, REANUDAR y el arranque no cuentan como corte.
+ *
+ * <p><b>En vivo</b> ({@link Config#enVivo}, captura): los relojes del emisor y del receptor no van
+ * exactamente a la misma velocidad y el buffer se va corriendo. Si el buffer (suavizado, ~1 s) se
+ * aleja más de {@link #DERIVA_BANDA_MS} del objetivo, se descarta o duplica 1 frame por bloque
+ * (~1 cada 1000) hasta volver a {@link #DERIVA_VUELTA_MS}. Si hay más que objetivo +
+ * {@link #DERIVA_TOPE_MS} (p. ej. tras un corte del enlace), se descartan bloques enteros.
  */
 public final class Reproductor {
 
@@ -37,6 +43,10 @@ public final class Reproductor {
     /** Tras 3 reaperturas seguidas sin que suene, 5 s sin vigilar antes de intentar de nuevo. */
     private static final int MAX_REAPERTURAS_SEGUIDAS = 3;
     private static final long PAUSA_TRAS_REAPERTURAS_NS = 5000000000L;
+
+    static final long DERIVA_BANDA_MS = 150;
+    static final long DERIVA_VUELTA_MS = 100;
+    static final long DERIVA_TOPE_MS = 400;
 
     /** Muestras (todos los canales) que caben en un bloque decodificado: los CONFIG con más se rechazan. */
     public static final int MAX_MUESTRAS_BLOQUE = Protocolo.MAX_CANALES * Protocolo.MUESTRAS_POR_BLOQUE;
@@ -65,7 +75,6 @@ public final class Reproductor {
     private int inicioReal;
     private boolean silencioDelante;
     private int umbralBloques;
-    private long objetivoUsado = -1;
 
     /** Lo que falta escribir: un bloque real ({@code actual != null}) o silencio. */
     private ColaBloques.Bloque actual;
@@ -84,6 +93,10 @@ public final class Reproductor {
     /** Reaperturas por salida trabada sin que la posición avance entre una y otra. */
     private int reaperturasSeguidas;
     private long sinVigilarHastaNs;
+    /** Nivel en ms × 32, suavizado (−1: sin medir todavía). */
+    private long nivelSuavizadoX32 = -1;
+    /** −1 descarta, +1 duplica, 0 nada. */
+    private int correccion;
 
     // --- Pedidos de otros hilos.
     private volatile boolean pausaPedida;
@@ -103,6 +116,9 @@ public final class Reproductor {
     private volatile int decodBloques;
     private volatile long decodNsMax;
     private volatile long intervaloMaxNs;
+    private volatile long framesDescartados;
+    private volatile long framesDuplicados;
+    private volatile long bloquesDescartados;
 
     /**
      * @param capacidadMs tope de {@link #bufferMs()} (capacidadBufferMs del HELLO)
@@ -111,7 +127,7 @@ public final class Reproductor {
         this.cola = cola;
         this.salida = salida;
         this.capacidadMs = capacidadMs;
-        this.pcm = new short[MAX_MUESTRAS_BLOQUE];
+        this.pcm = new short[MAX_MUESTRAS_BLOQUE + Protocolo.MAX_CANALES]; // + 1 frame duplicado
         this.silencio = new short[pcm.length];
     }
 
@@ -153,6 +169,9 @@ public final class Reproductor {
             decodBloques = 0;
             decodNsMax = 0;
             intervaloMaxNs = 0;
+            framesDescartados = 0;
+            framesDuplicados = 0;
+            bloquesDescartados = 0;
             reinicioMetricasPedido = false; // después de poner en cero: el STATE espera a esto
         }
 
@@ -168,8 +187,8 @@ public final class Reproductor {
         } else if (cfg != null && config == null && ahoraNs - ultimoIntentoAbrirNs >= REINTENTO_ABRIR_NS) {
             ultimoIntentoAbrirNs = ahoraNs; // la salida no se pudo abrir: otro intento
             aplicarGeneracion(gen, cfg);
-        } else if (cfg != null && config != null && cfg.bufferObjetivoMs != objetivoUsado) {
-            config = cfg;
+        } else if (cfg != null && config != null && !cfg.equals(config)) {
+            config = cfg; // mismo formato: otro objetivo o en vivo
             calcularUmbral();
         }
 
@@ -248,7 +267,6 @@ public final class Reproductor {
 
     /** Umbral de arranque: 70 % del objetivo, al menos el buffer de la salida + 2 bloques. */
     private void calcularUmbral() {
-        objetivoUsado = config.bufferObjetivoMs;
         long porObjetivo = bloquesPara(FRACCION_ARRANQUE * config.bufferObjetivoMs);
         long minimo = (capacidad + config.muestrasPorBloque - 1) / config.muestrasPorBloque + 2;
         long maximo = cola.capacidadBloques() - 2;
@@ -311,6 +329,8 @@ public final class Reproductor {
     /** Empieza (o retoma) a sonar. Las métricas de continuidad parten de cero. */
     private void arrancar(int nuevoEstado) {
         estado = nuevoEstado;
+        nivelSuavizadoX32 = -1;
+        correccion = 0;
         framesDesdeArranque = 0;
         ultimaEscrituraNs = 0;
         vigilarPosicion = false; // la salida tarda en arrancar: se empieza a vigilar al llenarla
@@ -362,6 +382,7 @@ public final class Reproductor {
                         estado = RELLENANDO;
                     }
                 } else {
+                    long nivelMs = -1;
                     if (framesDesdeArranque >= capacidad) { // la salida ya se llenó una vez
                         int pendiente = pendienteReal();
                         if (pendiente <= bloque) {
@@ -370,8 +391,19 @@ public final class Reproductor {
                         if (pendiente < minPendienteFrames) {
                             minPendienteFrames = pendiente;
                         }
+                        nivelMs = config.msParaBloques(cola.enCola() + 1) + config.msParaFrames(pendiente);
+                    }
+                    if (config.enVivo && nivelMs > config.bufferObjetivoMs + DERIVA_TOPE_MS) {
+                        // Muy atrasado (llegó junto lo que el enlace retuvo): fuera un bloque entero.
+                        cola.devolver(b);
+                        bloquesDescartados++;
+                        nivelSuavizadoX32 = -1;
+                        return 0;
                     }
                     decodificar(b);
+                    if (config.enVivo && nivelMs >= 0) {
+                        corregirDeriva(nivelMs);
+                    }
                 }
             }
             if (porEscribir == null) { // RELLENANDO o FIN: un bloque de silencio
@@ -396,6 +428,31 @@ public final class Reproductor {
         porEscribir = pcm;
         desde = 0;
         frames = config.muestrasPorBloque;
+    }
+
+    /** En vivo: descarta o duplica el último frame del bloque recién decodificado si hace falta. */
+    private void corregirDeriva(long nivelMs) {
+        long x = nivelMs * 32;
+        nivelSuavizadoX32 = nivelSuavizadoX32 < 0 ? x : nivelSuavizadoX32 + ((x - nivelSuavizadoX32) >> 5);
+        long error = nivelSuavizadoX32 / 32 - config.bufferObjetivoMs;
+        if (correccion == 0) {
+            if (error > DERIVA_BANDA_MS) {
+                correccion = -1;
+            } else if (error < -DERIVA_BANDA_MS) {
+                correccion = 1;
+            }
+        } else if (Math.abs(error) < DERIVA_VUELTA_MS) {
+            correccion = 0;
+        }
+        int ch = config.canales;
+        if (correccion < 0) {
+            frames = config.muestrasPorBloque - 1;
+            framesDescartados++;
+        } else if (correccion > 0) {
+            System.arraycopy(pcm, (config.muestrasPorBloque - 1) * ch, pcm, config.muestrasPorBloque * ch, ch);
+            frames = config.muestrasPorBloque + 1;
+            framesDuplicados++;
+        }
     }
 
     private long escribirPendiente(long ahoraNs) {
@@ -616,5 +673,20 @@ public final class Reproductor {
 
     public long intervaloMaximoMs() {
         return intervaloMaxNs / 1000000L;
+    }
+
+    /** En vivo: frames descartados por la compensación de deriva (el receptor iba atrasado). */
+    public long framesDescartados() {
+        return framesDescartados;
+    }
+
+    /** En vivo: frames duplicados por la compensación de deriva (el receptor iba adelantado). */
+    public long framesDuplicados() {
+        return framesDuplicados;
+    }
+
+    /** En vivo: bloques enteros descartados por exceso de buffer (p. ej. tras un corte del enlace). */
+    public long bloquesDescartados() {
+        return bloquesDescartados;
     }
 }

@@ -6,7 +6,8 @@ import java.io.IOException;
 
 /**
  * Payload de CONFIG (E→R): {@code códec u8, sampleRate u32, canales u8, muestrasPorBloque u16,
- * bufferObjetivoMs u32}. Define el formato de los AUDIO que siguen.
+ * bufferObjetivoMs u32}, más el bit {@link Protocolo#FLAG_EN_VIVO} en los flags de la trama (v3).
+ * Define el formato de los AUDIO que siguen.
  */
 public final class Config {
 
@@ -15,9 +16,17 @@ public final class Config {
     public final int canales;
     public final int muestrasPorBloque;
     public final long bufferObjetivoMs;
+    /** Audio en vivo (captura): el receptor compensa la deriva de reloj. */
+    public final boolean enVivo;
 
     /** @throws IllegalArgumentException si algún valor no cumple PROTOCOLO.md */
     public Config(int codec, int sampleRate, int canales, int muestrasPorBloque, long bufferObjetivoMs) {
+        this(codec, sampleRate, canales, muestrasPorBloque, bufferObjetivoMs, false);
+    }
+
+    /** @throws IllegalArgumentException si algún valor no cumple PROTOCOLO.md */
+    public Config(int codec, int sampleRate, int canales, int muestrasPorBloque, long bufferObjetivoMs,
+            boolean enVivo) {
         String error = validar(codec, sampleRate, canales, muestrasPorBloque, bufferObjetivoMs);
         if (error != null) {
             throw new IllegalArgumentException(error);
@@ -27,12 +36,22 @@ public final class Config {
         this.canales = canales;
         this.muestrasPorBloque = muestrasPorBloque;
         this.bufferObjetivoMs = bufferObjetivoMs;
+        this.enVivo = enVivo;
     }
 
     /** IMA ADPCM con bloques de {@link Protocolo#MUESTRAS_POR_BLOQUE} muestras. */
     public static Config imaAdpcm(int sampleRate, int canales, long bufferObjetivoMs) {
+        return imaAdpcm(sampleRate, canales, bufferObjetivoMs, false);
+    }
+
+    public static Config imaAdpcm(int sampleRate, int canales, long bufferObjetivoMs, boolean enVivo) {
         return new Config(Protocolo.CODEC_IMA_ADPCM, sampleRate, canales,
-                Protocolo.MUESTRAS_POR_BLOQUE, bufferObjetivoMs);
+                Protocolo.MUESTRAS_POR_BLOQUE, bufferObjetivoMs, enVivo);
+    }
+
+    /** Flags de la trama CONFIG. */
+    int flags() {
+        return enVivo ? Protocolo.FLAG_EN_VIVO : 0;
     }
 
     /** Bytes de un bloque ADPCM: por canal, 4 de cabecera y una muestra por nibble. */
@@ -65,6 +84,14 @@ public final class Config {
 
     /** @throws ProtocoloException si un valor recibido no cumple PROTOCOLO.md */
     public static Config leer(DataInputStream d) throws IOException {
+        return leer(d, 0);
+    }
+
+    /**
+     * @param flags los de la trama (bits desconocidos se ignoran)
+     * @throws ProtocoloException si un valor recibido no cumple PROTOCOLO.md
+     */
+    public static Config leer(DataInputStream d, int flags) throws IOException {
         int codec = d.readUnsignedByte();
         long sampleRate = d.readInt() & 0xFFFFFFFFL;
         int canales = d.readUnsignedByte();
@@ -77,7 +104,8 @@ public final class Config {
         if (error != null) {
             throw new ProtocoloException("CONFIG inválido: " + error);
         }
-        return new Config(codec, (int) sampleRate, canales, muestrasPorBloque, bufferObjetivoMs);
+        return new Config(codec, (int) sampleRate, canales, muestrasPorBloque, bufferObjetivoMs,
+                (flags & Protocolo.FLAG_EN_VIVO) != 0);
     }
 
     private static String validar(int codec, int sampleRate, int canales, int muestrasPorBloque,
@@ -110,7 +138,8 @@ public final class Config {
         }
         Config c = (Config) o;
         return codec == c.codec && sampleRate == c.sampleRate && canales == c.canales
-                && muestrasPorBloque == c.muestrasPorBloque && bufferObjetivoMs == c.bufferObjetivoMs;
+                && muestrasPorBloque == c.muestrasPorBloque && bufferObjetivoMs == c.bufferObjetivoMs
+                && enVivo == c.enVivo;
     }
 
     @Override
@@ -121,6 +150,7 @@ public final class Config {
     @Override
     public String toString() {
         return "Config{códec " + codec + ", " + sampleRate + " Hz, " + canales + " canales, "
-                + muestrasPorBloque + " muestras/bloque, objetivo " + bufferObjetivoMs + " ms}";
+                + muestrasPorBloque + " muestras/bloque, objetivo " + bufferObjetivoMs + " ms"
+                + (enVivo ? ", en vivo" : "") + "}";
     }
 }

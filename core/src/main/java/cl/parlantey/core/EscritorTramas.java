@@ -31,7 +31,7 @@ public final class EscritorTramas {
     public synchronized void config(Config config) throws IOException {
         empezar();
         config.escribir(datos);
-        enviar(Protocolo.CONFIG, 0);
+        enviar(Protocolo.CONFIG, config.flags());
     }
 
     /**

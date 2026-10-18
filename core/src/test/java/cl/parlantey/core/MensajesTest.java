@@ -54,6 +54,17 @@ public class MensajesTest {
                 bytes.toByteArray());
     }
 
+    /** v3: en vivo va en el bit 0 de los flags de la trama; el payload es el mismo. */
+    @Test
+    public void configEnVivoEnBytes() throws IOException {
+        escritor.config(Config.imaAdpcm(48000, 2, 500, true));
+        byte[] t = bytes.toByteArray();
+        assertEquals(Protocolo.FLAG_EN_VIVO, t[3]);
+        byte[] esperado = trama(Protocolo.CONFIG, 0x01, 0x00, 0x00, 0xBB, 0x80, 0x02, 0x04, 0x00, 0x00, 0x00, 0x01, 0xF4);
+        esperado[3] = Protocolo.FLAG_EN_VIVO;
+        assertArrayEquals(esperado, t);
+    }
+
     @Test
     public void audioEnBytes() throws IOException {
         escritor.audio(0x01020304L, new byte[] {9, (byte) 0xAA, (byte) 0xBB, 9}, 1, 2);
@@ -95,6 +106,8 @@ public class MensajesTest {
                 Config.imaAdpcm(Protocolo.TASA_MIN, 1, 0),
                 Config.imaAdpcm(Protocolo.TASA_MAX, 2, 0xFFFFFFFFL),
                 new Config(Protocolo.CODEC_IMA_ADPCM, 22050, 1, 65534, 500), // el bloque mono más grande
+                Config.imaAdpcm(48000, 2, 500, true),
+                Config.imaAdpcm(24000, 1, 500, true),
         };
         for (Config c : configs) {
             escritor.config(c);
@@ -103,7 +116,9 @@ public class MensajesTest {
         for (Config c : configs) {
             assertEquals(Protocolo.CONFIG, l.leer());
             assertEquals(12, l.largo());
-            assertEquals(c, Config.leer(l.datos()));
+            Config leida = Config.leer(l.datos(), l.flags());
+            assertEquals(c, leida);
+            assertEquals(c.enVivo, leida.enVivo);
             assertEquals(0, l.datos().available());
         }
     }

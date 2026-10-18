@@ -33,6 +33,14 @@ public final class FlujoEmisor {
     public static final long FIN = -1;
     /** Buffer objetivo para archivos y el tono de prueba (CLAUDE.md). */
     public static final long OBJETIVO_ARCHIVOS_MS = 2000;
+    /** Buffer objetivo para la captura en vivo (CLAUDE.md). */
+    public static final long OBJETIVO_EN_VIVO_MS = 500;
+    /**
+     * En vivo se envía apenas hay audio mientras el nivel no pase el objetivo + esto: así el buffer
+     * del receptor muestra la deriva de los relojes (la compensa el receptor) y, si el enlace se
+     * atrasa, lo que no se puede enviar se descarta en la captura en vez de acumular latencia.
+     */
+    static final long MARGEN_EN_VIVO_MS = 400;
 
     /** Nivel ≥ objetivo: esperar un STATE nuevo (cada 250 ms) o hasta este tiempo. */
     static final long ESPERA_LLENO_MS = 50;
@@ -53,7 +61,7 @@ public final class FlujoEmisor {
     private static final int TERMINADO = 2;
     private static final int DETENIDO = 3;
 
-    private final long objetivoMs;
+    private long objetivoMs;
     private final byte[] bloque = new byte[ImaAdpcm.bytesBloque(Protocolo.MAX_CANALES, Protocolo.MUESTRAS_POR_BLOQUE)];
     private int fase = DETENIDO;
 
@@ -111,6 +119,15 @@ public final class FlujoEmisor {
     /** @param objetivoMs bufferObjetivoMs de los CONFIG y del control de flujo */
     public FlujoEmisor(long objetivoMs) {
         this.objetivoMs = objetivoMs;
+    }
+
+    /** Otro objetivo (p. ej. archivos ↔ captura); vale desde la próxima pista que empiece. */
+    public void objetivo(long ms) {
+        objetivoMs = ms;
+    }
+
+    public long objetivo() {
+        return objetivoMs;
     }
 
     // --- Conexión.
@@ -275,7 +292,9 @@ public final class FlujoEmisor {
             escritor.config(configActual);
             configEnviado = configActual;
         }
-        if (nivel >= objetivoMs) {
+        long limite = configActual.enVivo ? configActual.bufferObjetivoMs + MARGEN_EN_VIVO_MS
+                : configActual.bufferObjetivoMs;
+        if (nivel >= limite) {
             return ESPERA_LLENO_MS;
         }
         int n = actual.siguiente(bloque);

@@ -991,4 +991,158 @@ public class SimulacionTest {
         assertTrue("la 2 sonó", c.sonados(1) > 24000 * 2);
         assertTrue("la 1 no volvió a sonar: " + c.sonados(0), c.sonados(0) < 48000 * 5);
     }
+
+    // --- En vivo (Fase 4).
+
+    /** Captura en vivo simulada: el "hilo de captura" llena una ColaCaptura de a 10 ms con su propio reloj. */
+    private static final class Vivo {
+        final ColaCaptura captura = new ColaCaptura(48000, 2, 250);
+        final ControlCola control = new ControlCola(FlujoEmisor.OBJETIVO_EN_VIVO_MS);
+        final Simulacion s;
+        /** Velocidad del reloj de captura respecto del de la salida del receptor. */
+        final double factor;
+        private double acumulado;
+        private final short[] trozo = new short[2 * 2000];
+        long ms;
+        // Métricas desde medirDesdeMs.
+        long medirDesdeMs = Long.MAX_VALUE;
+        long bufferMin = Long.MAX_VALUE;
+        long bufferMax;
+        long latenciaMin = Long.MAX_VALUE;
+        long latenciaMax;
+
+        Vivo(Preset preset, double factor) throws IOException {
+            this.factor = factor;
+            for (int i = 0; i < trozo.length; i++) {
+                trozo[i] = (short) (8000 * Math.sin(i / 2 * 2 * Math.PI * 440 / 48000));
+            }
+            control.preset(preset);
+            control.modo(true, FlujoEmisor.OBJETIVO_EN_VIVO_MS);
+            s = new Simulacion(control, 8192, 1024);
+            control.cola(new ControlCola.Fabrica() {
+                @Override
+                public int cantidad() {
+                    return 1;
+                }
+
+                @Override
+                public ControlCola.Apertura abrir(int indice, long desdeMs) {
+                    captura.vaciar(); // al (re)empezar, lo viejo ya no sirve
+                    return new ControlCola.Apertura() {
+                        @Override
+                        public boolean lista() {
+                            return true;
+                        }
+
+                        @Override
+                        public Fuente fuente() {
+                            return captura;
+                        }
+
+                        @Override
+                        public Track track() {
+                            return new Track("Todo el audio", "", 0);
+                        }
+
+                        @Override
+                        public String error() {
+                            return null;
+                        }
+
+                        @Override
+                        public void cerrar() {
+                        }
+                    };
+                }
+            });
+            control.reproducir(0, 0);
+        }
+
+        /**
+         * Latencia exacta: lo capturado que todavía no sonó (en la captura, el codificador, el enlace
+         * y el receptor), descontando lo descartado y corregido.
+         */
+        long latenciaMs() {
+            Reproductor r = s.reproductor;
+            long frames = captura.framesEscritos() - captura.framesDescartados()
+                    - r.bloquesDescartados() * Protocolo.MUESTRAS_POR_BLOQUE - r.framesDescartados()
+                    + r.framesDuplicados() - s.salida.framesSonados;
+            return frames * 1000 / 48000;
+        }
+
+        void correr(long n) throws IOException {
+            for (long i = 0; i < n; i++) {
+                ms++;
+                if (ms % 10 == 0) {
+                    acumulado += 480 * factor;
+                    int f = (int) acumulado;
+                    acumulado -= f;
+                    captura.escribir(trozo, 0, f);
+                }
+                s.tick();
+                if (ms >= medirDesdeMs) {
+                    long b = s.reproductor.bufferMs();
+                    bufferMin = Math.min(bufferMin, b);
+                    bufferMax = Math.max(bufferMax, b);
+                    long l = latenciaMs();
+                    latenciaMin = Math.min(latenciaMin, l);
+                    latenciaMax = Math.max(latenciaMax, l);
+                }
+            }
+        }
+    }
+
+    /**
+     * Criterio de la Fase 4 en la JVM: 30 min de captura con el reloj del emisor 0,05 % más rápido
+     * y más lento que el del receptor: sin cortes, con el buffer en la banda y la latencia estable.
+     */
+    @Test
+    public void treintaMinutosEnVivoConRelojesDistintos() throws IOException {
+        for (double factor : new double[] {1.0005, 0.9995}) {
+            Vivo v = new Vivo(Preset.ALTA, factor);
+            v.medirDesdeMs = 3 * 60 * 1000; // tras llegar a la banda
+            v.correr(30 * 60 * 1000);
+            String p = "×" + factor + ": ";
+            Reproductor r = v.s.reproductor;
+            assertEquals(p + "cortes", 0, r.cortes());
+            assertEquals(p + "faltas", 0, v.s.salida.faltas);
+            assertEquals(p + "descartado en la captura", 0, v.captura.msDescartados());
+            assertEquals(p + "bloques descartados", 0, r.bloquesDescartados());
+            long objetivo = FlujoEmisor.OBJETIVO_EN_VIVO_MS;
+            assertTrue(p + "buffer " + v.bufferMin + "–" + v.bufferMax, v.bufferMin >= objetivo - 150 - 60
+                    && v.bufferMax <= objetivo + 150 + 60);
+            assertTrue(p + "latencia " + v.latenciaMin + "–" + v.latenciaMax, v.latenciaMax - v.latenciaMin < 350
+                    && v.latenciaMax < 1000);
+            long deriva = Math.round(48000 * Math.abs(factor - 1) * 30 * 60);
+            long corregidos = factor > 1 ? r.framesDescartados() : r.framesDuplicados();
+            long alReves = factor > 1 ? r.framesDuplicados() : r.framesDescartados();
+            assertTrue(p + "corregidos " + corregidos + " de " + deriva, corregidos > deriva / 2 && corregidos < deriva * 3 / 2);
+            assertTrue(p + "al revés " + alReves, alReves < deriva / 10);
+            System.out.printf("En vivo %s 30 min: buffer %d–%d ms, latencia %d–%d ms, %d frames corregidos (deriva %d)%n",
+                    p, v.bufferMin, v.bufferMax, v.latenciaMin, v.latenciaMax, corregidos, deriva);
+        }
+    }
+
+    /** Si el enlace se corta 3 s, se descarta lo viejo: al volver, la latencia es la de antes. */
+    @Test
+    public void enVivoTrasUnCorteDelEnlaceLaLatenciaNoCrece() throws IOException {
+        Vivo v = new Vivo(Preset.ALTA, 1.0);
+        v.correr(60000);
+        long antes = v.s.reproductor.bufferMs();
+        v.s.er.pausado = true;
+        v.correr(3000);
+        v.s.er.pausado = false;
+        v.correr(3000);
+        assertTrue("se descartó lo viejo en la captura", v.captura.msDescartados() > 1000);
+        v.medirDesdeMs = v.ms;
+        v.correr(30000);
+        long objetivo = FlujoEmisor.OBJETIVO_EN_VIVO_MS;
+        assertTrue("buffer " + v.bufferMin + "–" + v.bufferMax + " (antes " + antes + ")",
+                v.bufferMax <= objetivo + Reproductor.DERIVA_TOPE_MS + 30);
+        long ahora = v.s.reproductor.bufferMs();
+        assertTrue("vuelve a la banda: " + ahora + " (antes " + antes + ")", ahora <= objetivo + Reproductor.DERIVA_BANDA_MS + 30);
+        assertTrue(v.s.reproductor.cortes() <= 1);
+        System.out.printf("En vivo tras 3 s de corte: buffer antes %d, después %d–%d ms, %d ms descartados en la captura, %d bloques en el receptor%n",
+                antes, v.bufferMin, v.bufferMax, v.captura.msDescartados(), v.s.reproductor.bloquesDescartados());
+    }
 }

@@ -41,6 +41,7 @@ public final class ControlCola {
     private final FlujoEmisor flujo;
     private Fabrica fabrica;
     private Preset preset = Preset.NORMAL;
+    private boolean enVivo;
 
     // Pista que se envía (y su apertura, para liberarla).
     private int indiceActual = -1;
@@ -124,6 +125,15 @@ public final class ControlCola {
 
     public Preset preset() {
         return preset;
+    }
+
+    /**
+     * Las pistas que se abran desde ahora son en vivo (captura) y usan este objetivo de buffer.
+     * Llamarlo antes de {@link #reproducir}.
+     */
+    public void modo(boolean enVivo, long objetivoMs) {
+        this.enVivo = enVivo;
+        flujo.objetivo(objetivoMs);
     }
 
     /**
@@ -310,7 +320,7 @@ public final class ControlCola {
         Fuente f = a.fuente();
         if (error == null && f != null) {
             try {
-                return new CodificadorPista(f, preset);
+                return new CodificadorPista(f, preset, enVivo);
             } catch (IllegalArgumentException e) {
                 error = e.getMessage();
             }

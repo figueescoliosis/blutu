@@ -110,7 +110,7 @@ public final class SesionReceptor {
         DataInputStream d = lector.datos();
         switch (tipo) {
             case Protocolo.CONFIG:
-                recibirConfig(Config.leer(d));
+                recibirConfig(Config.leer(d, lector.flags()));
                 break;
             case Protocolo.AUDIO:
                 recibirAudio(d);

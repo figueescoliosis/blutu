@@ -13,6 +13,7 @@ public final class CodificadorPista {
 
     private final Fuente fuente;
     private final Preset preset;
+    private final boolean enVivo;
     private final int canalesFuente;
     private final int canalesSalida;
     private final int tasaSalida;
@@ -34,8 +35,17 @@ public final class CodificadorPista {
      * @throws IllegalArgumentException si la fuente tiene una tasa o canales que no se pueden enviar
      */
     public CodificadorPista(Fuente fuente, Preset preset) {
+        this(fuente, preset, false);
+    }
+
+    /**
+     * @param enVivo la fuente es una captura en vivo: sus CONFIG llevan {@link Protocolo#FLAG_EN_VIVO}
+     * @throws IllegalArgumentException si la fuente tiene una tasa o canales que no se pueden enviar
+     */
+    public CodificadorPista(Fuente fuente, Preset preset, boolean enVivo) {
         this.fuente = fuente;
         this.preset = preset;
+        this.enVivo = enVivo;
         this.canalesFuente = fuente.canales();
         if (canalesFuente < 1 || canalesFuente > Downmix.MAX_CANALES_ENTRADA) {
             throw new IllegalArgumentException("canales de la fuente fuera de rango: " + canalesFuente);
@@ -62,6 +72,10 @@ public final class CodificadorPista {
         return preset;
     }
 
+    public boolean enVivo() {
+        return enVivo;
+    }
+
     public int tasaSalida() {
         return tasaSalida;
     }
@@ -72,7 +86,7 @@ public final class CodificadorPista {
 
     /** CONFIG de esta pista con el objetivo dado. */
     public Config config(long objetivoMs) {
-        return Config.imaAdpcm(tasaSalida, canalesSalida, objetivoMs);
+        return Config.imaAdpcm(tasaSalida, canalesSalida, objetivoMs, enVivo);
     }
 
     /** true si la salida de esta pista tiene el formato de {@code c} (tasa, canales y bloque). */

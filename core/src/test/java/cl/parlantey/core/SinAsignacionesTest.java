@@ -156,7 +156,17 @@ public class SinAsignacionesTest {
      */
     @Test
     public void cicloDelReceptor() throws IOException {
-        Config config = Config.imaAdpcm(48000, 2, 2000);
+        cicloDelReceptor(Config.imaAdpcm(48000, 2, 2000), "ciclo del receptor (red + audio + STATE)");
+    }
+
+    /** En vivo con el buffer lejos del objetivo: también la compensación de deriva (duplica frames). */
+    @Test
+    public void cicloDelReceptorEnVivo() throws IOException {
+        Reproductor r = cicloDelReceptor(Config.imaAdpcm(48000, 2, 2000, true), "ciclo del receptor en vivo (con deriva)");
+        assertTrue("pasó por la compensación", r.framesDuplicados() > 0);
+    }
+
+    private Reproductor cicloDelReceptor(Config config, String nombre) throws IOException {
         java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
         EscritorTramas e = new EscritorTramas(bytes);
         e.config(config);
@@ -209,10 +219,15 @@ public class SinAsignacionesTest {
             vuelta.run(); // llegar a SONANDO y cargar clases
         }
         long escritos = salida.framesEscritos;
-        sinAsignar("ciclo del receptor (red + audio + STATE)", 600, vuelta);
+        long duplicados = reproductor.framesDuplicados();
+        sinAsignar(nombre, 600, vuelta);
         assertTrue("sonó durante la medición", salida.framesEscritos - escritos > 600 * 1024);
         assertTrue("pasó por VACIAR", salida.vaciados > 0);
         assertEquals(null, salida.error);
+        if (config.enVivo) {
+            assertTrue("corrigió durante la medición", reproductor.framesDuplicados() > duplicados);
+        }
+        return reproductor;
     }
 
     /** Pipeline del emisor con dos etapas de decimación y downmix (96 kHz estéreo → Segura). */
