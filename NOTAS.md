@@ -281,3 +281,67 @@ Emisor: samsung SM-A356E (Android 16, API 36) · ParlanteY Emisor 0.2.0 · proto
 
 El usuario pidió seguir a la Fase 3 («sigue nomás, quiero escuchar música»). Las mediciones del Galaxy Y (`getMinBufferSize`, CPU, GC) quedan pendientes; hacen falta antes de la Fase 4.
 
+
+## Fase 3 — emisor modo Archivos
+
+### Verificación sin dispositivo (contenedor Linux, 2026-10-18)
+
+Protocolo **v2** (CONTROL 5 = FIN, PROTOCOLO.md). Receptor y emisor 0.3.0: la 0.2.0 no conecta con la 0.3.0 (BYE 1), hay que instalar las dos.
+
+**Tests JVM de `core`: 184, todos en verde.** Lo nuevo:
+
+| Test | Qué comprueba |
+|---|---|
+| `FlujoEmisorTest` (18) | Pista que sigue con el mismo formato: sin VACIAR, FIN ni CONFIG, seq continuo y TRACK cuando al receptor le queda < 1 bloque de la anterior. Con otro formato: FIN, espera dos STATE vacíos y sigue con TRACK → CONFIG → AUDIO. Fin de la cola; siguiente que llega tarde; la pausa se reenvía al reconectar; el plazo tras FIN no corre en pausa; posición tras reconectar. |
+| `ReproductorTest` (FIN) | FIN suena lo que queda sin corte, también con menos audio que el umbral; AUDIO tras FIN sigue sin corte; FIN durante un corte; audio después de terminar vuelve a sonar. |
+| `SimulacionTest` (24) | Emisor (`ControlCola`) + receptor completos con tiempo virtual y el enlace de la Fase 0 (165 KB/s). Ver abajo. |
+
+**Simulación de colas** (`SimulacionTest`, pistas sintéticas de nivel constante; la salida falsa cuenta cuántos frames de cada pista suenan de verdad):
+
+| Escenario | Resultado |
+|---|---|
+| 5 pistas: 44,1 kHz estéreo 3 s → 44,1 kHz estéreo 0,5 s (sin pausa) → 48 kHz estéreo → 44,1 kHz mono → 48 kHz mono (cambios de formato) | cada pista suena entera (± 64 frames de la rampa del códec), 0 cortes, 0 faltas, TRACK 1…5 en orden, 4 AudioTrack |
+| 9 pistas cortas seguidas (0,3 y 0,75 s) | todas enteras; cada TRACK llega con < 1 bloque de la anterior por sonar y < 0,4 s de la suya ya sonada |
+| Latencias (apertura simulada de 100 ms) | **pausa 17 ms, reanudar 68 ms, siguiente 538 ms, siguiente en pausa 550 ms** |
+| Siguiente con la pista que suena ya enviada (el emisor manda la que sigue) | va a la que sigue a la que suena; esa suena entera desde el principio |
+| Pausa mientras suena el final antes de otro formato | en pausa no empieza la siguiente; al reanudar todo suena entero |
+| Reconexión mientras suena el final, a media pista, en pausa, mientras se abre (dos veces) | retoma desde lo que se escuchó (repite < 0,5 s); en pausa sigue en pausa |
+| Cambio de preset a media pista (Alta → Segura) | sigue desde el mismo punto con 24 kHz mono; 20 s sonados de 20 s; 0 cortes. Mientras se abre un «siguiente», no vuelve a la anterior |
+| Pista que no abre (también la primera) | se salta y se avisa |
+| Anterior / siguiente | anterior con > 3 s reinicia, si no vuelve a la anterior; dos «siguiente» seguidos avanzan dos; siguiente en la última detiene |
+| Pistas agregadas al final, sonando o ya terminada la cola | siguen sonando |
+| 10 min de tono (Fase 2) | sin cambios: 0 cortes, buffer 1408–1941 ms en Alta |
+
+**Pruebas de mutación:** 15 errores introducidos a propósito en `FlujoEmisor`, `ControlCola` y `Reproductor` (TRACK inmediato, margen del TRACK, vacío con un STATE, no esperar el vacío, posiciones, índice que suena, pausa al reconectar, cola agregada, anterior, FIN en el receptor, corte mientras se abre, «finalizada» mientras se abre, preset mientras se abre): **los 15 detectados** (3 lo fueron recién tras agregar tests).
+
+**Revisión adversarial** (dos revisores independientes, emisor y decodificación): se corrigieron
+- un corte mientras se abre una canción no la retomaba;
+- volver a tocar una canción tras el final de la cola la dejaba «finalizada» (una reconexión o un cambio de preset la paraban);
+- latencias que podían confirmarse antes de tiempo;
+- aperturas que no se podían cancelar (archivos en la nube) bloqueaban la siguiente;
+- un seek podía fijar mal el formato de salida;
+- errores que pasaban de una sesión a otra.
+
+**Lint, APK y SDK real:**
+- Lint de core, receptor y emisor: 0 avisos.
+- `./gradlew :receptor:verificarApk` OK; dependencias del receptor (`debug` y `release`): solo `project ':core'`.
+- `herramientas/verificar_api.py` contra API 10: 205 referencias externas, 71 tipos, **0 faltantes**.
+- `apksigner verify --min-sdk-version 9`: firma v1 válida. APK del receptor: 148 560 bytes.
+- Sin asignaciones en el camino de audio (`SinAsignacionesTest`): 0 bytes, también `FlujoEmisor.paso`.
+
+**Lo que no se puede probar aquí:** la decodificación real con MediaCodec (`AperturaArchivo`) y el selector de archivos. Se revisaron a mano contra la API (formato de salida del decodificador, PCM de 8/16/24/32 bits y float, seek, fin de archivo, decodificador trabado).
+
+### Pruebas en los teléfonos
+
+Versiones: receptor 0.3.0 y emisor 0.3.0 (protocolo v2), release v0.3.0.
+
+| Prueba | Resultado |
+|---|---|
+| ① Cola de 3 pistas (MP3, M4A y FLAC) suena completa | [PENDIENTE] |
+| ② Pausa < 1 s y siguiente < 1 s (columnas «Pausa → STATE» y «Siguiente → STATE» de la tabla) | [PENDIENTE] |
+| ③ Preset Auto = Alta (≈ 165 KB/s medidos en la Fase 0) | [PENDIENTE] |
+| ④ Cambiar el preset con una canción sonando: sigue desde el mismo punto | [PENDIENTE] |
+| ⑤ Música con las dos pantallas apagadas; controles desde la notificación | [PENDIENTE] |
+| ⑥ Apagar y encender el Bluetooth del emisor con música: vuelve desde donde iba | [PENDIENTE] |
+
+Tabla de «Copiar para NOTAS (Fase 3)»: [PENDIENTE]
