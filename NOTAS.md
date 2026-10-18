@@ -239,10 +239,26 @@ Versiones: receptor 0.2.0 y emisor 0.2.0 (protocolo v1), release v0.2.0.
 |---|---|
 | ① 10 min de tono con las dos pantallas apagadas (emisor en segundo plano, batería «Optimizada») | [PENDIENTE] cortes, subcortes |
 | ② Apagar y encender el Bluetooth del emisor, app en segundo plano: reconecta solo y el tono vuelve (5 ciclos) | [PENDIENTE] |
-| 2 cambios de preset sin reiniciar el receptor | [PENDIENTE] |
+| Cambios de tono sin reiniciar el receptor | ✓ 4 cambios seguidos (Auto→Alta, 48↔44,1 kHz), 0 cortes |
 | Detener desde la notificación mientras reconecta → no reintenta | [PENDIENTE] |
 | «Detener receptor» con el tono sonando → el emisor no reintenta | [PENDIENTE] |
 | Reconexión con la pantalla del Galaxy Y apagada desde hace ≥ 2 min | [PENDIENTE] |
+
+**Primera tanda (2026-10-17 23:43).** Tabla copiada desde el emisor; el usuario informa «todo ok»:
+
+Emisor: samsung SM-A356E (Android 16, API 36) · ParlanteY Emisor 0.2.0 · protocolo v1
+
+| Inicio | Duración | Preset | Formato | Cortes | Buffer mín/prom/máx (ms) | Reconexiones | Encender BT → suena (s) |
+|---|---|---|---|---|---|---|---|
+| 2026-10-17 23:43:03 | 0:28 | Alta (Auto) | 48 kHz estéreo | 0 | 1722/1759/1789 | 0 | — |
+| 2026-10-17 23:43:32 | 0:02 | Alta (Auto) | 44.1 kHz estéreo | 0 | 1740/1780/1833 | 0 | — |
+| 2026-10-17 23:43:37 | 0:02 | Alta | 44.1 kHz estéreo | 0 | 1740/1776/1833 | 0 | — |
+| 2026-10-17 23:43:44 | 0:03 | Alta | 48 kHz estéreo | 0 | 1708/1760/1786 | 0 | — |
+| 2026-10-17 23:43:52 | 0:01 | Alta | 48 kHz estéreo | 0 | 1584/1722/1780 | 0 | — |
+
+- El tono suena en Alta a 48 y a 44,1 kHz, sin cortes, y los cambios de tono funcionan sin reiniciar el receptor.
+- El buffer medido en el receptor (prom. ≈ 1760 ms) coincide con la simulación: objetivo de 2000 ms menos la antigüedad del STATE (≤ 250 ms).
+- En esta tabla no aparecen ① ni ②: la prueba más larga dura 28 s y no hay reconexiones. La tabla vive en la memoria de la app emisora, así que se pierde si Android la cierra.
 
 **Mediciones del Galaxy Y** (logcat `adb logcat -s ParlanteY`, línea «minuto: …», y la pantalla del receptor):
 
