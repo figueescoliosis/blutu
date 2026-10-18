@@ -91,7 +91,11 @@ public final class ControlCola {
 
     public void desconectar() {
         int sonando = indiceSonando();
-        if (sonando >= 0 && !flujo.detenido() && !finalizada) {
+        if (pendiente != null) {
+            // Se estaba abriendo (la primera, un "siguiente" o la que se retomaba): esa gana.
+            retomarIndice = indicePendiente;
+            retomarDesdeMs = desdeMsPendiente;
+        } else if (sonando >= 0 && !flujo.detenido() && !finalizada) {
             retomarIndice = sonando;
             retomarDesdeMs = ultimaPosicionMs;
         }
@@ -187,12 +191,24 @@ public final class ControlCola {
         finalizada = false;
     }
 
+    /** La cola terminó y ya sonó entera: cierra los archivos sin enviar DETENER. */
+    public void terminar() {
+        flujo.olvidar();
+        cerrarTodo();
+        indiceActual = -1;
+        retomarIndice = -1;
+        finalizada = false;
+    }
+
     /** Otro preset: la pista que suena sigue desde donde va con el preset nuevo. */
     public void cambiarPreset(Preset nuevo) {
         if (nuevo == preset) {
             return;
         }
         preset = nuevo;
+        if (pendiente != null) {
+            return; // la que se abre ya usará este preset (crearPista lo lee al terminar)
+        }
         int i = indiceSonando();
         if (i >= 0 && !flujo.detenido() && !finalizada) {
             abrir(i, ultimaPosicionMs);
@@ -223,7 +239,7 @@ public final class ControlCola {
             siguienteListo = false;
             prepararSiguiente(indiceActual + 1);
         }
-        if (espera == FlujoEmisor.FIN && flujo.terminado()) {
+        if (espera == FlujoEmisor.FIN && flujo.terminado() && pendiente == null) {
             finalizada = true;
         }
         if (flujo.actual() != null) {
@@ -254,6 +270,7 @@ public final class ControlCola {
         siguienteListo = false;
         aperturaActual = a;
         indiceActual = i;
+        finalizada = false;
         flujo.reproducir(pista, a.track(), true);
         anotarNumero(i, desdeMsPendiente);
         cambiosVistos = flujo.cambiosDePista();
@@ -372,5 +389,11 @@ public final class ControlCola {
 
     public long errores() {
         return errores;
+    }
+
+    /** Errores en cero (una sesión de música nueva). */
+    public void reiniciarErrores() {
+        errores = 0;
+        ultimoError = null;
     }
 }

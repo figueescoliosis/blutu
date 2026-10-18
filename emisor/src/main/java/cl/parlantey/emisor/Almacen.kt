@@ -38,10 +38,14 @@ object Almacen {
                 val mediciones = lista(prefs.getString("mediciones", null), ::medicion)
                 val tono = lista(prefs.getString("pruebasTono", null), ::resumenTono)
                 val musica = lista(prefs.getString("musica", null), ::resumenMusica)
-                val kBps = prefs.getString("kBps", null)?.let { t ->
-                    val o = JSONObject(t)
-                    o.keys().asSequence().associateWith { o.getDouble(it) }
-                } ?: emptyMap()
+                val kBps = try {
+                    prefs.getString("kBps", null)?.let { t ->
+                        val o = JSONObject(t)
+                        o.keys().asSequence().associateWith { o.getDouble(it) }
+                    } ?: emptyMap()
+                } catch (e: Exception) {
+                    emptyMap()
+                }
                 EstadoEmisor.actualizar {
                     it.copy(
                         mediciones = mediciones + it.mediciones,
@@ -80,10 +84,23 @@ object Almacen {
         }
     }
 
+    /** Un registro ilegible (p. ej. de otra versión) se salta; no se pierde el resto. */
     private fun <T> lista(texto: String?, leer: (JSONObject) -> T): List<T> {
         if (texto == null) return emptyList()
-        val a = JSONArray(texto)
-        return (0 until a.length()).map { leer(a.getJSONObject(it)) }
+        val a = try {
+            JSONArray(texto)
+        } catch (e: Exception) {
+            Log.w(Supervisor.TAG, "lista guardada ilegible", e)
+            return emptyList()
+        }
+        return (0 until a.length()).mapNotNull {
+            try {
+                leer(a.getJSONObject(it))
+            } catch (e: Exception) {
+                Log.w(Supervisor.TAG, "registro guardado ilegible", e)
+                null
+            }
+        }
     }
 
     private fun JSONObject.longs(clave: String): List<Long> =

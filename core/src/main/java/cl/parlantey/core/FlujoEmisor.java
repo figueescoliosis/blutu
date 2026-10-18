@@ -198,6 +198,15 @@ public final class FlujoEmisor {
         fase = DETENIDO;
     }
 
+    /**
+     * Como {@link #detener} pero sin enviar DETENER: para cuando la cola terminó y el receptor ya
+     * sonó todo tras el FIN (así sigue mostrando «Fin de la cola»). Conserva el CONFIG enviado.
+     */
+    public void olvidar() {
+        detener();
+        detenerPendiente = false;
+    }
+
     // --- Paso.
 
     /**

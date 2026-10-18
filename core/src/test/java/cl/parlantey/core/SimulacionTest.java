@@ -680,9 +680,14 @@ public class SimulacionTest {
         assertEquals("tres formatos distintos: tres AudioTrack", 4, c.s.salida.aperturas);
         assertFalse(c.s.estado.reproduciendo);
         assertTrue("solo queda abierta la última", c.fabrica.abiertas - c.fabrica.cerradas <= 1);
-        c.control.detener();
+        c.control.terminar(); // como la app al terminar la cola
         c.s.correr(100);
         assertEquals(c.fabrica.abiertas, c.fabrica.cerradas);
+        assertTrue("el receptor sigue en «Fin de la cola»", c.s.reproductor.finalizado());
+        c.control.reproducir(0, 0); // y se puede volver a empezar
+        c.s.correr(3000);
+        assertEquals(Reproductor.SONANDO, c.s.reproductor.estado());
+        assertEquals(0, c.s.reproductor.cortes());
     }
 
     /**
@@ -933,5 +938,57 @@ public class SimulacionTest {
         sonoEntera(c, 2);
         assertEquals(java.util.Arrays.asList("Pista 1", "Pista 2", "Pista 3"), c.s.tracks);
         assertEquals(0, c.s.reproductor.cortes());
+    }
+
+    /** Se corta mientras la canción se abre (la primera, o dos cortes seguidos): al volver, suena. */
+    @Test
+    public void reconectarMientrasSeAbre() throws IOException {
+        Cola c = new Cola(Preset.ALTA, new PistaSintetica(44100, 2, 4).demora(1500));
+        c.control.reproducir(0, 0);
+        c.s.correr(500);
+        c.s.reconectar();
+        c.s.correr(500);
+        c.s.reconectar(); // otra vez, antes de que termine de abrir
+        c.hastaFinalizar(20000);
+        sonoEntera(c, 0);
+        c.sinCortesNiErrores();
+    }
+
+    /** Volver a tocar una canción cuando la cola ya terminó: no queda "finalizada" mientras suena. */
+    @Test
+    public void reproducirTrasElFinalNoQuedaFinalizada() throws IOException {
+        Cola c = new Cola(Preset.ALTA, new PistaSintetica(44100, 2, 2), new PistaSintetica(44100, 2, 10).demora(800));
+        c.control.reproducir(0, 0);
+        c.fabrica.visibles = 1;
+        c.control.cola(c.fabrica);
+        c.hastaFinalizar(20000);
+        c.fabrica.visibles = 2;
+        c.control.cola(c.fabrica);
+        c.control.reproducir(1, 0);
+        c.s.correr(400);
+        assertFalse("abriendo no es finalizada", c.control.finalizada());
+        c.s.correr(3000);
+        assertFalse(c.control.finalizada());
+        c.s.reconectar(); // a media canción: retoma
+        c.hastaFinalizar(30000);
+        long b = c.sonados(1);
+        long frames = c.fabrica.pistas[1].frames;
+        assertTrue("pista 2: sonaron " + b + " de " + frames, b >= frames - 64 && b <= frames + 44100 / 2);
+    }
+
+    /** Cambiar el preset mientras se abre un "siguiente" no vuelve a la anterior. */
+    @Test
+    public void presetMientrasSeAbreNoCancelaSiguiente() throws IOException {
+        Cola c = new Cola(Preset.ALTA, new PistaSintetica(48000, 2, 10), new PistaSintetica(48000, 2, 3).demora(500));
+        c.control.reproducir(0, 0);
+        c.s.correr(3000);
+        c.control.siguiente();
+        c.s.correr(100);
+        c.control.cambiarPreset(Preset.SEGURA);
+        c.hastaFinalizar(20000);
+        assertEquals(1, c.control.indiceSonando());
+        assertEquals("con el preset nuevo", 24000, c.s.salida.tasa());
+        assertTrue("la 2 sonó", c.sonados(1) > 24000 * 2);
+        assertTrue("la 1 no volvió a sonar: " + c.sonados(0), c.sonados(0) < 48000 * 5);
     }
 }

@@ -120,6 +120,9 @@ class Supervisor(
     private var pausaDesde = 0L
     private var siguienteDesde = 0L
     private var numeroAlPedir = 0L
+    /** Tras el "siguiente", un STATE ya mostró al receptor llenando (sin sonar) con la pista nueva. */
+    private var vioRellenar = false
+    private var ultimoReproduciendo = false
 
     fun iniciar() {
         hiloEnlace.start()
@@ -288,6 +291,9 @@ class Supervisor(
         cortesBase = 0
         // Reconexión con audio en curso: CONFIG + TRACK de nuevo y sigue desde lo que se escuchó.
         control.conectar(s.escritor(), s::estado)
+        pausaDesde = 0
+        siguienteDesde = 0
+        ultimoReproduciendo = false
         if (modo != null) {
             s.setAudioActivo(true)
             resumenTono = resumenTono?.let { it.copy(reconexiones = it.reconexiones + 1) }
@@ -332,8 +338,16 @@ class Supervisor(
                         control.abriendo() -> ESPERA_ABRIENDO_MS
                         control.finalizada() || control.flujo().detenido() -> {
                             val completa = control.finalizada()
-                            if (control.flujo().detenido() && control.errores() > 0) {
+                            if (!completa && control.errores() > 0) {
                                 publicar { it.copy(aviso = control.ultimoError()) }
+                            }
+                            // Cierra el último archivo. Si terminó la cola, el receptor ya sonó todo
+                            // y sigue mostrando «Fin de la cola»; si no, recibe DETENER.
+                            if (completa) {
+                                control.terminar()
+                            } else {
+                                control.detener()
+                                control.paso(System.nanoTime())
                             }
                             finAudio(s, completa)
                             0
@@ -433,8 +447,8 @@ class Supervisor(
         if (c.indice !in lista.indices) return
         if (modo == Modo.TONO) detenerAudio(s)
         opcion = c.opcion
+        if (modo != Modo.MUSICA || lista != canciones) control.cola(FabricaArchivos(contexto, lista, ejecutor))
         canciones = lista
-        control.cola(FabricaArchivos(contexto, lista, ejecutor))
         control.preset(opcion.resolver(kBps()))
         if (modo == Modo.MUSICA) {
             medirSiguiente()
@@ -464,7 +478,8 @@ class Supervisor(
     private fun pausar() {
         if (modo == null || control.pausado()) return
         control.pausar()
-        pausaDesde = SystemClock.elapsedRealtime()
+        // Solo se mide si estaba sonando: si no, cualquier STATE "sin sonar" la confirmaría.
+        pausaDesde = if (ultimoReproduciendo && !control.abriendo()) SystemClock.elapsedRealtime() else 0
     }
 
     private fun reanudar() {
@@ -476,10 +491,13 @@ class Supervisor(
     private fun medirSiguiente() {
         siguienteDesde = SystemClock.elapsedRealtime()
         numeroAlPedir = control.flujo().numeroActual()
+        vioRellenar = false
+        pausaDesde = 0
     }
 
     private fun empezarAudio(s: SesionEmisor, m: Modo) {
         modo = m
+        control.reiniciarErrores()
         s.setAudioActivo(true)
         cortesPrevios = 0
         cortesConexion = 0
@@ -500,6 +518,7 @@ class Supervisor(
         val e = s.estado() ?: return
         val m = modo ?: return
         cortesConexion = (e.cortes - cortesBase).coerceAtLeast(0)
+        ultimoReproduciendo = e.reproduciendo
         val vivo = EnVivo(e.bufferMs, cortesPrevios + cortesConexion, e.reproduciendo, control.flujo().nivelEstimadoMs(), e.ultimoSeq)
         val ahora = SystemClock.elapsedRealtime()
         var recuperacion: Long? = null
@@ -541,6 +560,7 @@ class Supervisor(
             bufferSumaMs = r0.bufferSumaMs + if (e.reproduciendo) e.bufferMs else 0,
             muestrasBuffer = r0.muestrasBuffer + if (e.reproduciendo) 1 else 0,
         )
+        if (pausaDesde != 0L && !control.pausado()) pausaDesde = 0 // se reanudó (p. ej. con siguiente)
         if (pausaDesde != 0L && !e.reproduciendo) {
             r = r.copy(pausasMs = r.pausasMs + (ahora - pausaDesde))
             pausaDesde = 0
@@ -548,10 +568,16 @@ class Supervisor(
         val f = control.flujo()
         val inicio = f.seqInicioActual()
         if (siguienteDesde != 0L && !control.abriendo() && f.numeroActual() != numeroAlPedir &&
-            inicio != Protocolo.SEQ_NINGUNO && e.reproduciendo && Seq.distancia(e.ultimoSeq, inicio) >= 0
+            inicio != Protocolo.SEQ_NINGUNO
         ) {
-            r = r.copy(siguientesMs = r.siguientesMs + (ahora - siguienteDesde))
-            siguienteDesde = 0
+            // Primero un STATE llenando (tras VACIAR) y después uno sonando con la pista nueva: el
+            // flag "reproduciendo" de un STATE puede ser de antes de que el hilo de audio vaciara.
+            if (!e.reproduciendo) {
+                vioRellenar = true
+            } else if (vioRellenar && Seq.distancia(e.ultimoSeq, inicio) >= 0) {
+                r = r.copy(siguientesMs = r.siguientesMs + (ahora - siguienteDesde))
+                siguienteDesde = 0
+            }
         }
         if (pausaDesde != 0L && ahora - pausaDesde > LIMITE_MEDICION_MS) pausaDesde = 0
         if (siguienteDesde != 0L && ahora - siguienteDesde > LIMITE_MEDICION_MS) siguienteDesde = 0

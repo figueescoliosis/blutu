@@ -105,8 +105,14 @@ class ServicioEmisor : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACCION_CONECTAR -> conectar(intent)
+        val accion = intent?.action
+        if (accion != ACCION_CONECTAR && supervisor == null) {
+            // Un pedido que llega sin conexión (p. ej. tras cerrarse): no dejar el servicio iniciado.
+            terminarSiInactivo()
+            return START_NOT_STICKY
+        }
+        when (accion) {
+            ACCION_CONECTAR -> conectar(intent!!)
             ACCION_DETENER -> supervisor?.detener() ?: terminarSiInactivo()
             ACCION_TONO -> supervisor?.comando(
                 Comando.IniciarTono(
