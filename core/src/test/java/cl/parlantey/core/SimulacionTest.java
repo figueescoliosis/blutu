@@ -814,6 +814,10 @@ public class SimulacionTest {
         c.s.reconectar();
         long desde = c.fabrica.desdes.get(c.fabrica.desdes.size() - 1);
         assertTrue("reabre en " + desde + " ms", desde > 8000 && desde < 10000);
+        c.s.correr(5000);
+        c.s.reconectar(); // la segunda cuenta desde donde se reabrió la primera
+        desde = c.fabrica.desdes.get(c.fabrica.desdes.size() - 1);
+        assertTrue("reabre otra vez en " + desde + " ms", desde > 12000 && desde < 15000);
         c.hastaFinalizar(30000);
         long a = c.sonados(0);
         long frames = c.fabrica.pistas[0].frames;

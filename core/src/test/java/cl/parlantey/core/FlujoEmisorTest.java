@@ -248,6 +248,7 @@ public class FlujoEmisorTest {
         hastaEsperar(p);
         List<Trama> t = nueva.nuevas();
         assertEquals("TRACK de nuevo al reconectar", Protocolo.TRACK, t.get(0).tipo);
+        assertTrue("la posición sigue donde iba la pista: " + p.posicionMs(), p.posicionMs() >= 2000);
         assertEquals("y CONFIG", Protocolo.CONFIG, t.get(1).tipo);
         assertEquals("el seq vuelve a 0", 0, t.get(2).seq());
         assertEquals("el STATE ajeno no hace enviar de más", 94, contar(t, Protocolo.AUDIO));
