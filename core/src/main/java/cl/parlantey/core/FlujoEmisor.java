@@ -11,7 +11,8 @@ import java.io.IOException;
  * <ul>
  * <li>{@link #reproducir} con {@code vaciar}: VACIAR → CONFIG (si cambia el formato) → TRACK → AUDIO.</li>
  * <li>Fin natural de una pista con {@link #siguiente} del mismo formato: sin pausa, sin VACIAR ni
- * CONFIG; el TRACK sale cuando el receptor termina de sonar la anterior.</li>
+ * CONFIG; el TRACK sale cuando el receptor termina de sonar la anterior (le queda menos de un
+ * bloque de ella). Para eso lleva las pistas que el receptor tiene en el buffer ("tramos").</li>
  * <li>Fin natural con otro formato: FIN; cuando el receptor terminó de sonar, CONFIG → TRACK → AUDIO.</li>
  * <li>Fin de la última pista: FIN.</li>
  * </ul>
@@ -41,6 +42,11 @@ public final class FlujoEmisor {
      * (sin contar el tiempo en pausa).
      */
     static final long MARGEN_VACIO_MS = 3000;
+    /**
+     * Pistas que puede haber a la vez en el buffer del receptor. Con más (pistas de menos de
+     * objetivo / 16), el TRACK de alguna sale antes de tiempo; el audio no cambia.
+     */
+    public static final int MAX_TRAMOS = 16;
 
     private static final int SONANDO = 0;
     private static final int ESPERANDO_VACIO = 1;
@@ -58,13 +64,23 @@ public final class FlujoEmisor {
     private long framesActual;
     private CodificadorPista siguiente;
     private Track trackSiguiente;
-    /** Pista que todavía suena en el receptor tras un cambio sin pausa (hasta enviar el TRACK). */
-    private CodificadorPista previa;
-    private long framesPrevia;
-    private boolean trackPendiente;
-    private boolean trackDiferido;
     private long cambiosDePista;
+    /** Número de la pista actual: cuenta cada {@link #reproducir} y cada cambio de pista. */
+    private long numeroActual;
     private boolean pausado;
+
+    // --- Tramos: las pistas de esta generación en el receptor, de la que suena a la que se envía.
+    // Una generación empieza con cada corte (conexión, VACIAR, CONFIG de otro formato).
+    /** Frames (en bloques completos) enviados en esta generación. */
+    private long framesGeneracion;
+    private final long[] tramoInicio = new long[MAX_TRAMOS]; // en frames de la generación
+    private final long[] tramoBase = new long[MAX_TRAMOS]; // frames de la pista enviados antes del tramo
+    private final long[] tramoNumero = new long[MAX_TRAMOS];
+    private final Track[] tramoTrack = new Track[MAX_TRAMOS];
+    private int tramoPrimero;
+    private int tramos;
+    /** El TRACK del primer tramo (el que suena) todavía no se envió. */
+    private boolean trackPendiente;
 
     // --- Pedidos para el próximo paso.
     private int controlPendiente;
@@ -111,11 +127,14 @@ public final class FlujoEmisor {
         controlPendiente = pausado ? Protocolo.CONTROL_PAUSA : 0; // la pausa es por conexión
         nivelPublicadoMs = 0;
         if (fase == ESPERANDO_VACIO) {
-            pasarASiguiente(false); // el receptor de la conexión nueva ya está vacío
+            pasarASiguiente(); // el receptor de la conexión nueva ya está vacío
         } else if (fase == SONANDO && actual != null) {
-            previa = null;
-            trackPendiente = trackActual != null;
-            trackDiferido = false;
+            nuevaGeneracion(); // lo que tenía el receptor se perdió: suena la actual desde ya
+        } else if (fase == TERMINADO) {
+            vaciosSeguidos = 2; // no hay nada que esperar que suene
+            framesGeneracion = 0;
+            tramos = 0;
+            trackPendiente = false;
         }
     }
 
@@ -136,10 +155,10 @@ public final class FlujoEmisor {
             vaciarPendiente = true;
         }
         detenerPendiente = false;
-        previa = null;
         siguiente = null;
         trackSiguiente = null;
-        ponerActual(pista, track, false);
+        ponerActual(pista, track);
+        nuevaGeneracion(); // tras VACIAR (o en un receptor vacío) suena esta desde ya
         fase = SONANDO;
     }
 
@@ -169,9 +188,9 @@ public final class FlujoEmisor {
         detenerPendiente = escritor != null;
         actual = null;
         siguiente = null;
-        previa = null;
         trackActual = null;
         trackSiguiente = null;
+        tramos = 0;
         trackPendiente = false;
         fase = DETENIDO;
     }
@@ -217,6 +236,7 @@ public final class FlujoEmisor {
         nivelPublicadoMs = nivel;
         if (fase == TERMINADO) {
             if (siguiente == null) {
+                avanzarTramos(nivel);
                 return vacio(ahoraNs) ? FIN : ESPERA_LLENO_MS;
             }
             // Llegó una pista más después del FIN.
@@ -228,9 +248,10 @@ public final class FlujoEmisor {
         }
         if (fase == ESPERANDO_VACIO) {
             if (!vacio(ahoraNs)) {
+                avanzarTramos(nivel); // las pistas cortas que quedan en el receptor también tienen TRACK
                 return ESPERA_LLENO_MS;
             }
-            pasarASiguiente(false);
+            pasarASiguiente();
         }
 
         if (!configActual.equals(configEnviado)) {
@@ -241,13 +262,7 @@ public final class FlujoEmisor {
             escritor.config(configActual);
             configEnviado = configActual;
         }
-        if (trackPendiente && (!trackDiferido || nivel - configActual.msParaFrames(framesActual)
-                <= configActual.msParaBloques(1))) {
-            // Diferido: cuando lo que queda en el receptor ya es todo de esta pista.
-            escritor.track(trackActual);
-            trackPendiente = false;
-            previa = null;
-        }
+        avanzarTramos(nivel);
         if (nivel >= objetivoMs) {
             return ESPERA_LLENO_MS;
         }
@@ -276,37 +291,87 @@ public final class FlujoEmisor {
         seqEnviado = seq;
         bloquesEnviados++;
         framesActual += n;
+        framesGeneracion += Protocolo.MUESTRAS_POR_BLOQUE; // el receptor suena el bloque entero
         return 0;
     }
 
-    private void ponerActual(CodificadorPista pista, Track track, boolean diferido) {
+    private void ponerActual(CodificadorPista pista, Track track) {
         actual = pista;
         trackActual = track;
         configActual = pista.config(objetivoMs);
         framesActual = 0;
-        trackPendiente = track != null;
-        trackDiferido = diferido;
+        numeroActual++;
     }
 
     /** Fin natural con la siguiente del mismo formato: sigue sin pausa ni CONFIG. */
     private void cambioSinPausa() {
-        previa = actual;
-        framesPrevia = framesActual;
-        ponerActual(siguiente, trackSiguiente, true);
+        ponerActual(siguiente, trackSiguiente);
         siguiente = null;
         trackSiguiente = null;
         fase = SONANDO;
         cambiosDePista++;
+        if (tramos == MAX_TRAMOS) {
+            sacarTramo(); // demasiadas pistas cortas: el TRACK de la que sigue sale antes
+        }
+        agregarTramo();
     }
 
     /** El receptor terminó de sonar (o la conexión es nueva): empieza la siguiente, con su CONFIG. */
-    private void pasarASiguiente(boolean diferido) {
-        previa = null;
-        ponerActual(siguiente, trackSiguiente, diferido);
+    private void pasarASiguiente() {
+        ponerActual(siguiente, trackSiguiente);
         siguiente = null;
         trackSiguiente = null;
         fase = SONANDO;
         cambiosDePista++;
+        nuevaGeneracion();
+    }
+
+    /** El receptor empieza vacío: el único tramo es la actual (desde donde va) y su TRACK sale ya. */
+    private void nuevaGeneracion() {
+        framesGeneracion = 0;
+        tramos = 0;
+        agregarTramo();
+    }
+
+    private void agregarTramo() {
+        if (tramos == 0) {
+            trackPendiente = trackActual != null; // es la que suena
+        }
+        int i = (tramoPrimero + tramos) % MAX_TRAMOS;
+        tramoInicio[i] = framesGeneracion;
+        tramoBase[i] = framesActual;
+        tramoNumero[i] = numeroActual;
+        tramoTrack[i] = trackActual;
+        tramos++;
+    }
+
+    private void sacarTramo() {
+        tramoTrack[tramoPrimero] = null;
+        tramoPrimero = (tramoPrimero + 1) % MAX_TRAMOS;
+        tramos--;
+        trackPendiente = tramoTrack[tramoPrimero] != null;
+    }
+
+    /** Frames de la generación que el receptor ya sonó, estimados con el nivel. */
+    private long framesOidos(long nivel) {
+        return framesGeneracion - nivel * configActual.sampleRate / 1000;
+    }
+
+    /**
+     * Saca los tramos que ya sonaron y envía el TRACK de la pista que empieza a sonar: cuando al
+     * receptor le queda menos de un bloque de la anterior.
+     */
+    private void avanzarTramos(long nivel) throws IOException {
+        if (tramos >= 2) {
+            long oidos = framesOidos(nivel) + Protocolo.MUESTRAS_POR_BLOQUE;
+            while (tramos >= 2 && tramoInicio[(tramoPrimero + 1) % MAX_TRAMOS] <= oidos) {
+                sacarTramo();
+            }
+        }
+        if (trackPendiente) {
+            escritor.track(tramoTrack[tramoPrimero]);
+            trackPendiente = false;
+        }
     }
 
     /**
@@ -361,23 +426,32 @@ public final class FlujoEmisor {
         return trackActual;
     }
 
-    /** true si en el receptor todavía suena la pista anterior (cambio sin pausa en curso). */
+    /** true si en el receptor todavía suena una pista anterior a la actual (cambio sin pausa en curso). */
     public boolean sonandoPrevia() {
-        return previa != null;
+        return tramos >= 2;
     }
 
-    /** Lo que ya sonó de la pista que suena ahora en el receptor, estimado, en ms. */
+    /**
+     * Número de la pista que suena en el receptor (ver {@link #numeroActual}); el de la actual si no
+     * se sabe.
+     */
+    public long numeroSonando() {
+        return tramos > 0 ? tramoNumero[tramoPrimero] : numeroActual;
+    }
+
+    /** Número de la pista actual: sube con cada {@link #reproducir} y cada cambio de pista. */
+    public long numeroActual() {
+        return numeroActual;
+    }
+
+    /** Lo que ya sonó de la pista que suena ahora en el receptor, estimado, en ms desde su inicio. */
     public long posicionMs() {
         Config c = configActual;
-        if (c == null) {
+        if (c == null || tramos == 0) {
             return 0;
         }
-        long nivel = nivelMs();
-        if (previa != null) {
-            long msNueva = c.msParaFrames(framesActual);
-            return Math.max(0, c.msParaFrames(framesPrevia) - Math.max(0, nivel - msNueva));
-        }
-        return Math.max(0, c.msParaFrames(framesActual) - nivel);
+        long frames = framesOidos(nivelMs()) - tramoInicio[tramoPrimero] + tramoBase[tramoPrimero];
+        return Math.max(0, c.msParaFrames(frames));
     }
 
     /** Cuántas veces la pista actual pasó a la siguiente sola (fin natural). */
@@ -396,6 +470,11 @@ public final class FlujoEmisor {
 
     public boolean detenido() {
         return fase == DETENIDO;
+    }
+
+    /** true si envió FIN y espera que el receptor termine de sonar para pasar a otro formato. */
+    boolean esperandoVacio() {
+        return fase == ESPERANDO_VACIO;
     }
 
     /** CONFIG de la pista actual (null si no hay). */

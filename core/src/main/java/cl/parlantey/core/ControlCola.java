@@ -45,11 +45,14 @@ public final class ControlCola {
     // Pista que se envía (y su apertura, para liberarla).
     private int indiceActual = -1;
     private Apertura aperturaActual;
-    // Pista anterior, que todavía suena en un cambio sin pausa.
-    private int indiceAnterior = -1;
+    // Índice en la cola y desde dónde se abrió (las posiciones del flujo son relativas a eso) de
+    // cada pista del flujo, por su número (FlujoEmisor.numeroActual), para las que aún suenan.
+    private final int[] indiceDeNumero = new int[FlujoEmisor.MAX_TRAMOS];
+    private final long[] inicioMsDeNumero = new long[FlujoEmisor.MAX_TRAMOS];
     // Abriéndose para reproducir ya.
     private Apertura pendiente;
     private int indicePendiente = -1;
+    private long desdeMsPendiente;
     // Preparándose como siguiente.
     private Apertura preparando;
     private int indicePreparando = -1;
@@ -120,6 +123,7 @@ public final class ControlCola {
         cerrar(pendiente);
         pendiente = fabrica.abrir(indice, desdeMs);
         indicePendiente = indice;
+        desdeMsPendiente = desdeMs;
         finalizada = false;
         retomarIndice = -1; // lo que se elige gana a lo que se iba a retomar
         if (flujo.pausado()) {
@@ -128,7 +132,7 @@ public final class ControlCola {
     }
 
     public void siguiente() {
-        int i = indiceSonando();
+        int i = pendiente != null ? indicePendiente : indiceSonando(); // dos toques seguidos avanzan dos
         if (fabrica != null && i + 1 < fabrica.cantidad()) {
             reproducir(i + 1, 0);
         } else {
@@ -137,6 +141,10 @@ public final class ControlCola {
     }
 
     public void anterior() {
+        if (pendiente != null) {
+            reproducir(Math.max(0, indicePendiente - 1), 0);
+            return;
+        }
         int i = indiceSonando();
         if (i < 0) {
             return;
@@ -160,7 +168,6 @@ public final class ControlCola {
         flujo.detener();
         cerrarTodo();
         indiceActual = -1;
-        indiceAnterior = -1;
         retomarIndice = -1;
         finalizada = false;
     }
@@ -192,8 +199,8 @@ public final class ControlCola {
             cambiosVistos = flujo.cambiosDePista();
             // El flujo pasó a la siguiente: la actual ya se envió entera.
             cerrar(aperturaActual);
-            indiceAnterior = indiceActual;
             indiceActual = indiceSiguiente;
+            anotarNumero(indiceActual, 0);
             aperturaActual = aperturaSiguiente;
             aperturaSiguiente = null;
             indiceSiguiente = -1;
@@ -204,7 +211,7 @@ public final class ControlCola {
             finalizada = true;
         }
         if (flujo.actual() != null) {
-            ultimaPosicionMs = flujo.posicionMs();
+            ultimaPosicionMs = inicioMsDeNumero[ranura(flujo.numeroSonando())] + flujo.posicionMs();
         }
         return espera;
     }
@@ -231,10 +238,10 @@ public final class ControlCola {
         siguienteListo = false;
         aperturaActual = a;
         indiceActual = i;
-        indiceAnterior = -1;
         flujo.reproducir(pista, a.track(), true);
+        anotarNumero(i, desdeMsPendiente);
         cambiosVistos = flujo.cambiosDePista();
-        ultimaPosicionMs = 0;
+        ultimaPosicionMs = desdeMsPendiente;
         prepararSiguiente(i + 1);
     }
 
@@ -294,6 +301,16 @@ public final class ControlCola {
         siguienteListo = false;
     }
 
+    private void anotarNumero(int indice, long inicioMs) {
+        int r = ranura(flujo.numeroActual());
+        indiceDeNumero[r] = indice;
+        inicioMsDeNumero[r] = inicioMs;
+    }
+
+    private static int ranura(long numero) {
+        return (int) (numero % FlujoEmisor.MAX_TRAMOS);
+    }
+
     private static void cerrar(Apertura a) {
         if (a != null) {
             a.cerrar();
@@ -304,10 +321,10 @@ public final class ControlCola {
 
     /** La pista que se escucha ahora (−1 si ninguna). */
     public int indiceSonando() {
-        if (flujo.sonandoPrevia() && indiceAnterior >= 0) {
-            return indiceAnterior;
+        if (indiceActual < 0) {
+            return -1;
         }
-        return indiceActual;
+        return indiceDeNumero[ranura(flujo.numeroSonando())];
     }
 
     /** Lo que ya sonó de la pista que se escucha, en ms (estimado). */

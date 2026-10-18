@@ -10,9 +10,17 @@ package cl.parlantey.core;
  * contador de 32 bits que puede partir de cualquier valor.</li>
  * <li>Solo un hilo puede llamarla.</li>
  * </ul>
- * El tiempo avanza con {@link #avanzar}. Cuenta las faltas de datos audibles ({@link #faltas}).
+ * El tiempo avanza con {@link #avanzar}. Cuenta las faltas de datos audibles ({@link #faltas}) y,
+ * con un {@link Clasificador}, cuántos frames de cada clase sonaron de verdad ({@link #sonadosPorClase}).
  */
 final class SalidaFalsa implements Salida {
+
+    /** Clase de un frame según su muestra del canal 0 (0..{@link #MAX_CLASES}−1). */
+    interface Clasificador {
+        int clase(short muestra);
+    }
+
+    static final int MAX_CLASES = 16;
 
     private final int capacidad;
     private final int granularidad;
@@ -61,6 +69,14 @@ final class SalidaFalsa implements Salida {
     boolean vigilarAlVaciar;
     int umbral;
     long sobreUmbral;
+    /** Si no es null, cuenta en {@link #sonadosPorClase} los frames que suenan, por clase. */
+    Clasificador clasificador;
+    final long[] sonadosPorClase = new long[MAX_CLASES];
+    // Lo escrito que aún no suena, como tramos (clase, frames) en orden; cola circular.
+    private final int[] tramoClase = new int[1 << 16];
+    private final long[] tramoFrames = new long[1 << 16];
+    private int tramoInicio;
+    private int tramos;
 
     SalidaFalsa(int capacidad, int granularidad, int posicionInicial, int largoHistorial) {
         this.capacidad = capacidad;
@@ -106,6 +122,7 @@ final class SalidaFalsa implements Salida {
         sonando = false;
         llenando = true;
         pendiente = 0;
+        tramos = 0;
         posicion = posicionInicial;
         fraccion = 0;
         return true;
@@ -143,6 +160,9 @@ final class SalidaFalsa implements Salida {
             }
             if (vigilar && v > umbral) {
                 sobreUmbral++;
+            }
+            if (clasificador != null) {
+                agregarTramo(clasificador.clase(v));
             }
         }
         pendiente += n;
@@ -192,6 +212,7 @@ final class SalidaFalsa implements Salida {
             vigilar = true;
         }
         pendiente = 0;
+        tramos = 0;
         posicion = posicionInicial;
         llenando = true;
         fraccion = 0;
@@ -223,6 +244,7 @@ final class SalidaFalsa implements Salida {
                 pendiente -= granularidad;
                 posicion += granularidad;
                 framesSonados += granularidad;
+                sonarTramos(granularidad);
             } else {
                 faltas++; // underrun: el mezclador pone silencio y la posición no avanza
             }
@@ -235,9 +257,48 @@ final class SalidaFalsa implements Salida {
      */
     void recrearSola() {
         pendiente = 0;
+        tramos = 0;
         posicion = 0;
         llenando = true;
         fraccion = 0;
+    }
+
+    private void agregarTramo(int clase) {
+        if (clase < 0 || clase >= MAX_CLASES) {
+            fallar("clase fuera de rango: " + clase);
+            return;
+        }
+        if (tramos > 0) {
+            int ultimo = (tramoInicio + tramos - 1) & (tramoClase.length - 1);
+            if (tramoClase[ultimo] == clase) {
+                tramoFrames[ultimo]++;
+                return;
+            }
+        }
+        if (tramos == tramoClase.length) {
+            fallar("demasiados tramos");
+            return;
+        }
+        int i = (tramoInicio + tramos) & (tramoClase.length - 1);
+        tramoClase[i] = clase;
+        tramoFrames[i] = 1;
+        tramos++;
+    }
+
+    private void sonarTramos(long frames) {
+        if (clasificador == null) {
+            return;
+        }
+        while (frames > 0 && tramos > 0) {
+            long n = Math.min(frames, tramoFrames[tramoInicio]);
+            sonadosPorClase[tramoClase[tramoInicio]] += n;
+            tramoFrames[tramoInicio] -= n;
+            frames -= n;
+            if (tramoFrames[tramoInicio] == 0) {
+                tramoInicio = (tramoInicio + 1) & (tramoClase.length - 1);
+                tramos--;
+            }
+        }
     }
 
     boolean sonando() {
