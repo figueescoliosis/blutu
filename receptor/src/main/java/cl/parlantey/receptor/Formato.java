@@ -14,11 +14,25 @@ final class Formato {
         return (decimas < 0 ? "-" : "") + (abs / 10) + "," + (abs % 10);
     }
 
-    /** "Título — Artista", o solo el título si no hay artista. */
+    /** "Título — Artista (3:25)": sin artista o sin duración (en vivo), sin esa parte. */
     static String track(Track t) {
         if (t == null) {
             return "";
         }
-        return t.artista.length() == 0 ? t.titulo : t.titulo + " — " + t.artista;
+        String texto = t.artista.length() == 0 ? t.titulo : t.titulo + " — " + t.artista;
+        return t.duracionMs > 0 ? texto + " (" + duracion(t.duracionMs) + ")" : texto;
+    }
+
+    /** 205000 → "3:25"; 3725000 → "1:02:05". */
+    static String duracion(long ms) {
+        long s = ms / 1000;
+        long h = s / 3600;
+        long m = s / 60 % 60;
+        long seg = s % 60;
+        String resto = (seg < 10 ? ":0" : ":") + seg;
+        if (h > 0) {
+            return h + (m < 10 ? ":0" : ":") + m + resto;
+        }
+        return m + resto;
     }
 }

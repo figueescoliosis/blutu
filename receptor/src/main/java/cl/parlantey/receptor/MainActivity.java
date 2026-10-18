@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     private String vEmisor;
     private int vEstadoReproductor = -1;
     private boolean vReproduciendo;
+    private boolean vFinalizado;
     private Track vTrack;
     private long vBufferMs = -1;
     private int vCortes = -1;
@@ -190,12 +191,15 @@ public class MainActivity extends Activity {
         String emisor = s.emisor;
         int estRep = r.estado();
         boolean sonando = r.reproduciendo();
-        if (est != vEstado || !emisor.equals(vEmisor) || estRep != vEstadoReproductor || sonando != vReproduciendo) {
+        boolean finalizado = r.finalizado();
+        if (est != vEstado || !emisor.equals(vEmisor) || estRep != vEstadoReproductor || sonando != vReproduciendo
+                || finalizado != vFinalizado) {
             vEstado = est;
             vEmisor = emisor;
             vEstadoReproductor = estRep;
             vReproduciendo = sonando;
-            estado.setText(textoEstado(est, emisor, estRep, sonando, r.pausado()));
+            vFinalizado = finalizado;
+            estado.setText(textoEstado(est, emisor, estRep, sonando, r.pausado(), finalizado));
         }
 
         Track t = s.track;
@@ -261,7 +265,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String textoEstado(int est, String emisor, int estRep, boolean sonando, boolean pausado) {
+    private String textoEstado(int est, String emisor, int estRep, boolean sonando, boolean pausado,
+            boolean finalizado) {
         switch (est) {
             case ServicioReceptor.BT_APAGADO:
                 return getString(R.string.estado_bt_apagado);
@@ -273,6 +278,9 @@ public class MainActivity extends Activity {
                 }
                 if (sonando) {
                     return getString(R.string.estado_reproduciendo, emisor);
+                }
+                if (finalizado) {
+                    return getString(R.string.estado_fin_cola, emisor);
                 }
                 if (estRep == Reproductor.LLENANDO) {
                     return getString(R.string.estado_llenando, emisor);
