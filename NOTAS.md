@@ -231,7 +231,7 @@ Además:
 - APK del receptor: 131 969 bytes.
 - Dependencias del receptor (`debugRuntimeClasspath` y `releaseRuntimeClasspath`): solo `project ':core'`.
 
-### Pruebas en los teléfonos — [PENDIENTE]
+### Pruebas en los teléfonos
 
 Versiones: receptor 0.2.0 y emisor 0.2.0 (protocolo v1), release v0.2.0.
 
@@ -271,3 +271,13 @@ Emisor: samsung SM-A356E (Android 16, API 36) · ParlanteY Emisor 0.2.0 · proto
 | CPU del proceso (%), `adb shell top -m 5` | [PENDIENTE] | [PENDIENTE] |
 | GC por minuto | [PENDIENTE] | [PENDIENTE] |
 | ¿Se oye distinto el tono de 48 kHz (remuestreo a 44,1 en AudioFlinger)? | | [PENDIENTE] |
+
+### Conclusión de la Fase 2 — cerrada el 2026-10-18 por decisión del usuario
+
+| Criterio | Resultado |
+|---|---|
+| ① 10 min de tono sin cortes con la pantalla apagada | Informado como «todo ok»; la tabla copiada solo muestra pruebas de hasta 28 s, todas sin cortes. Verificado en la JVM (simulación de 10 min: 0 cortes). |
+| ② Reconecta solo tras apagar y encender el Bluetooth del emisor | Informado como «todo ok»; no aparece en la tabla copiada (0 reconexiones). Verificado por revisión del código. |
+
+El usuario pidió seguir a la Fase 3 («sigue nomás, quiero escuchar música»). Las mediciones del Galaxy Y (`getMinBufferSize`, CPU, GC) quedan pendientes; hacen falta antes de la Fase 4.
+
