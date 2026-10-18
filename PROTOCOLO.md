@@ -140,7 +140,7 @@ Título UTF, artista UTF y duraciónMs u32 (0 = en vivo). Solo informa a la UI d
 | cmd | Efecto en el receptor |
 |---|---|
 | 1 PAUSA | Pausa `AudioTrack` y conserva la cola. |
-| 2 REANUDAR | Reanuda. |
+| 2 REANUDAR | Reanuda. Si la cola y lo pendiente en `AudioTrack` no alcanzan para llenarlo, vuelve a llenar hasta el umbral de arranque (en 2.3, una pista reanudada no suena hasta llenarse de nuevo). No cuenta como corte. |
 | 3 VACIAR | Descarta la cola y lo pendiente en `AudioTrack` (`pause()` + `flush()`: en 2.3, `flush()` con la pista sonando no hace nada), conserva el CONFIG y vuelve a llenar hasta el umbral de arranque antes de sonar. **Conserva la pausa**: si estaba en PAUSA, sigue en pausa. |
 | 4 DETENER | Lo mismo que VACIAR, más `stop()` y liberar `AudioTrack`. Olvida el CONFIG: el siguiente audio necesita un CONFIG nuevo. **Quita la pausa**: el audio siguiente empieza sonando. |
 

@@ -64,6 +64,8 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
     private HiloServidor servidor;
     private PowerManager.WakeLock wakeLock;
     private boolean receptorRegistrado;
+    /** onDestroy ya corrió: el wake lock no se vuelve a tomar (protegido por "this"). */
+    private boolean destruido;
     /** "when" de la notificación: fijo, para que no salte de lugar al actualizarse. */
     private long inicio;
 
@@ -167,7 +169,10 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
         detenerServidor();
         hiloAudio.detener();
         Debug.stopAllocCounting();
-        soltarWakeLock();
+        synchronized (this) {
+            destruido = true;
+            soltarWakeLock();
+        }
         stopForeground(true);
         super.onDestroy();
     }
@@ -263,14 +268,16 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
     @Override
     @SuppressLint("WakelockTimeout") // se suelta al terminar la conexión, que puede durar horas
     public void conectado(String nombre) {
-        if (instancia != this) {
-            return; // el servicio ya terminó: no tomar un wake lock que nadie soltaría
+        synchronized (this) {
+            if (destruido) {
+                return; // el servicio ya terminó: no tomar un wake lock que nadie soltaría
+            }
+            wakeLock.acquire();
         }
         estadoConexion = CONECTADO;
         emisor = nombre;
         track = null;
         evento = "";
-        wakeLock.acquire();
         Log.i(Registro.TAG, "conectado a " + nombre);
         actualizarNotificacion(getString(R.string.estado_conectado, nombre), "");
     }
@@ -313,7 +320,7 @@ public final class ServicioReceptor extends Service implements HiloServidor.Oyen
         Registro.guardarError(this, donde, t);
     }
 
-    private void soltarWakeLock() {
+    private synchronized void soltarWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
         }

@@ -27,6 +27,8 @@ public final class SesionReceptor {
     public static final long INTERVALO_ESTADO_NS = 250000000L;
     /** Sin ninguna trama durante 5 s, la conexión se da por muerta (el emisor envía PING cada 1 s). */
     public static final long LIMITE_SILENCIO_NS = 5000000000L;
+    /** Lo más que el primer STATE espera a que el hilo de audio ponga las métricas en cero. */
+    static final long ESPERA_REINICIO_NS = 500000000L;
 
     private final LectorTramas lector;
     private final EscritorTramas escritor;
@@ -41,6 +43,7 @@ public final class SesionReceptor {
     private volatile boolean iniciada;
     private volatile long nanosUltimaTrama;
     private long proximoEstadoNs;
+    private long inicioNs;
 
     private boolean enPrueba;
     private long bytesPrueba;
@@ -78,6 +81,7 @@ public final class SesionReceptor {
         long ahora = reloj.nanos();
         nanosUltimaTrama = ahora;
         proximoEstadoNs = ahora;
+        inicioNs = ahora;
         iniciada = true;
     }
 
@@ -241,8 +245,11 @@ public final class SesionReceptor {
         if (ahoraNs - proximoEstadoNs < 0) {
             return true;
         }
-        if (reproductor != null && reproductor.reinicioPendiente()) {
-            return true; // que el primer STATE no lleve los cortes de la conexión anterior
+        if (reproductor != null && reproductor.reinicioPendiente() && ahoraNs - inicioNs < ESPERA_REINICIO_NS) {
+            // Que el primer STATE no lleve los cortes de la conexión anterior; el hilo de audio
+            // los pone en cero en ms. Si no lo hace (no está corriendo), el STATE sale igual.
+            proximoEstadoNs = ahoraNs + 10000000L;
+            return true;
         }
         proximoEstadoNs += INTERVALO_ESTADO_NS;
         if (ahoraNs - proximoEstadoNs >= 0) {

@@ -86,10 +86,13 @@ class Supervisor(
 
     /** Detener: sin reintentos. Si hay conexión, el hilo de enlace envía DETENER y BYE(0) antes de cerrar. */
     fun detener() {
-        detenido = true
-        plazoNs = System.nanoTime() + TIEMPO_DESPEDIDA_NS
+        synchronized(monitor) {
+            // Con el mismo monitor que plazo(): el plazo de la despedida no se puede pisar.
+            detenido = true
+            plazoNs = System.nanoTime() + TIEMPO_DESPEDIDA_NS
+            monitor.notifyAll()
+        }
         if (sesion == null) conexion?.cerrar() // conectando o esperando el HELLO: cortar ya
-        synchronized(monitor) { monitor.notifyAll() }
     }
 
     fun bluetoothEncendido() {
@@ -417,8 +420,10 @@ class Supervisor(
     }
 
     private fun plazo(ms: Long) {
-        if (detenido) return // se mantiene el plazo de la despedida (detener)
-        plazoNs = if (ms == 0L) 0L else System.nanoTime() + ms * 1_000_000L
+        synchronized(monitor) {
+            if (detenido) return // se mantiene el plazo de la despedida (detener)
+            plazoNs = if (ms == 0L) 0L else System.nanoTime() + ms * 1_000_000L
+        }
     }
 
     /** Espera a que se encienda el Bluetooth (o detener), y ~1 s más. */

@@ -163,7 +163,7 @@ Total: **84 tests JVM, 0 fallas** (`./gradlew :core:testDebugUnitTest`). Corren 
 
 ### Verificación sin dispositivo (contenedor Linux, 2026-10-17)
 
-**Tests JVM:** `./gradlew :core:testDebugUnitTest` → **154 tests, 0 fallas** (~10 s; los de tiempo real, repetidos 3 veces seguidas sin fallas).
+**Tests JVM:** `./gradlew :core:testDebugUnitTest` → **157 tests, 0 fallas** (~10 s; los de tiempo real, repetidos 3 veces seguidas sin fallas).
 
 | Test | Qué prueba |
 |---|---|
@@ -212,6 +212,13 @@ Además:
   - wake lock tomado con el Bluetooth apagado;
   - sin aviso al rendirse con la pantalla apagada (ahora deja una notificación);
   - el vigía disparaba durante la espera entre reintentos.
+
+**Revisión final del código de los arreglos** (un cuarto revisor): nada crítico. Con 200 simulaciones al azar de 60 s con la semántica de 2.3 (pausas, VACIAR, huecos de datos, demoras del hilo de hasta 300 ms, períodos del mezclador de 256 a 4096 frames), la detección de salida trabada no se disparó nunca en falso. Se corrigieron, con tests y mutaciones que los detectan:
+- REANUDAR con la salida a medio llenar y sin bloques para completarla quedaba «sonando» mudo (en 2.3 AudioFlinger vuelve a exigir el buffer lleno al reanudar); ahora vuelve a llenar. La `SalidaFalsa` imita ese comportamiento.
+- Tras 3 reaperturas seguidas por salida trabada, espera 5 s antes de la siguiente (antes se reabría sin parar si no se arreglaba).
+- El primer STATE espera el reinicio de métricas como mucho 500 ms, reintentando cada 10 ms.
+- Una pausa ya no se quita sobre la pista vieja mientras se aplica un DETENER.
+- El BYE de «Detener receptor» también llega a una conexión recién aceptada; el wake lock del receptor no se toma después de destruir el servicio; el plazo de Detener del emisor no se puede pisar; el emisor suelta el wake lock si el Bluetooth se vuelve a apagar enseguida.
 
 **Pendiente para las fases siguientes** (no ocurre con el tono de la Fase 2):
 - Fase 3: un pipeline nuevo sin VACIAR ni DETENER (pistas sin pausa entre ellas) ignora lo que el receptor ya tiene, y el fin de una fuente finita no se avisa (el receptor cuenta un corte). El supervisor actual siempre envía DETENER antes de un tono nuevo.

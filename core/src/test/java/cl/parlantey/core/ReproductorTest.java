@@ -490,4 +490,42 @@ public class ReproductorTest {
         assertEquals(Reproductor.SIN_CONFIG, r.estado());
         assertEquals(ESTEREO.msParaBloques(10), r.bufferMs());
     }
+
+    /**
+     * En 2.3 una pista reanudada no suena hasta volver a llenarse. REANUDAR con la salida a medio
+     * llenar y sin bloques para completarla vuelve a LLENANDO (antes quedaba "sonando" muda).
+     */
+    @Test
+    public void reanudarSinConQueLlenarLaSalidaVuelveALlenar() {
+        arrancarEstereo();
+        correr(UMBRAL_ESTEREO * 22 - 120); // quedan ~5 bloques reales en la salida y la cola vacía
+        assertEquals(0, cola.enCola());
+        r.pedirPausa(true);
+        pasos();
+        r.pedirPausa(false);
+        pasos();
+        assertEquals(Reproductor.LLENANDO, r.estado());
+        assertFalse(r.reproduciendo());
+        encolar(ESTEREO, UMBRAL_ESTEREO, 1000);
+        correr(300);
+        assertEquals(Reproductor.SONANDO, r.estado());
+        long antes = salida.framesSonados;
+        correr(300);
+        assertTrue("vuelve a sonar", salida.framesSonados > antes);
+        assertEquals(0, r.cortes());
+    }
+
+    /** Si reabrir no arregla la salida, tras 3 intentos seguidos espera 5 s antes del siguiente. */
+    @Test
+    public void salidaQueNoSeArreglaNoSeReabreSinParar() {
+        arrancarEstereo();
+        encolar(ESTEREO, 100, 1000);
+        correr(300);
+        salida.trabadaSiempre = true;
+        for (int i = 0; i < 10; i++) {
+            encolar(ESTEREO, Math.min(60, cola.capacidadBloques() - cola.enCola() - 2), 1000);
+            correr(1000);
+        }
+        assertTrue("reaperturas en 10 s: " + r.erroresSalida(), r.erroresSalida() >= 3 && r.erroresSalida() <= 4);
+    }
 }

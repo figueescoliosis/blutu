@@ -57,6 +57,10 @@ class ServicioEmisor : Service() {
     private val cambiosBluetooth = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val estado = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            if (estado == BluetoothAdapter.STATE_OFF && EstadoEmisor.estado.value.enlace is Enlace.BluetoothApagado) {
+                // Se volvió a apagar antes de que el estado cambiara: soltar el wake lock de STATE_ON.
+                actualizarWakeLock(false)
+            }
             if (estado == BluetoothAdapter.STATE_ON && supervisor != null) {
                 Log.i(Supervisor.TAG, "Bluetooth encendido")
                 // Con el Bluetooth apagado se soltó el wake lock: tomarlo ya, antes de reconectar.

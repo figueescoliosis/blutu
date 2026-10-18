@@ -34,6 +34,9 @@ public final class Reproductor {
      * quedó trabado o se recreó solo (p. ej. murió mediaserver). Se reabre.
      */
     static final long SALIDA_TRABADA_NS = 1500000000L;
+    /** Tras 3 reaperturas seguidas sin que suene, 5 s sin vigilar antes de intentar de nuevo. */
+    private static final int MAX_REAPERTURAS_SEGUIDAS = 3;
+    private static final long PAUSA_TRAS_REAPERTURAS_NS = 5000000000L;
 
     /** Muestras (todos los canales) que caben en un bloque decodificado: los CONFIG con más se rechazan. */
     public static final int MAX_MUESTRAS_BLOQUE = Protocolo.MAX_CANALES * Protocolo.MUESTRAS_POR_BLOQUE;
@@ -78,6 +81,9 @@ public final class Reproductor {
     private int ultimaPosicion;
     private long posicionDesdeNs;
     private boolean vigilarPosicion;
+    /** Reaperturas por salida trabada sin que la posición avance entre una y otra. */
+    private int reaperturasSeguidas;
+    private long sinVigilarHastaNs;
 
     // --- Pedidos de otros hilos.
     private volatile boolean pausaPedida;
@@ -258,6 +264,9 @@ public final class Reproductor {
         if (pedida == pausado) {
             return;
         }
+        if (!pedida && cola.generacion() != generacion) {
+            return; // llegó un VACIAR/DETENER: aplicarlo primero (no hacer sonar la pista vieja)
+        }
         pausado = pedida;
         if (!abierta || (estado != SONANDO && estado != RELLENANDO)) {
             return;
@@ -265,8 +274,11 @@ public final class Reproductor {
         if (pausado) {
             salida.pausar();
             ultimaEscrituraNs = 0;
-        } else if (cola.enCola() < umbralBloques && pendienteReal() < config.muestrasPorBloque) {
-            // REANUDAR sin datos: vuelve a llenar, sin contar corte.
+        } else if ((cola.enCola() < umbralBloques && pendienteReal() < config.muestrasPorBloque)
+                || cola.enCola() * config.muestrasPorBloque + pendienteTotal() < capacidad) {
+            // REANUDAR sin datos suficientes: vuelve a llenar, sin contar corte. En 2.3, una pista
+            // en pausa sale de las activas de AudioFlinger y al reanudarla no suena hasta llenarse
+            // otra vez: sin lo necesario para llenarla, se quedaría muda.
             if (estado == RELLENANDO) {
                 marcarSilencioDelante(); // lo que quedó en la salida es silencio de relleno
             }
@@ -364,6 +376,11 @@ public final class Reproductor {
         if (libre <= 0) {
             if (salidaTrabada(ahoraNs)) {
                 erroresSalida++;
+                if (++reaperturasSeguidas >= MAX_REAPERTURAS_SEGUIDAS) {
+                    // Reabrir no la arregla: dejar pasar un rato antes de otro intento.
+                    reaperturasSeguidas = 0;
+                    sinVigilarHastaNs = ahoraNs + PAUSA_TRAS_REAPERTURAS_NS;
+                }
                 soltarActual();
                 if (reabrir(config)) {
                     reiniciarPosicion();
@@ -434,6 +451,13 @@ public final class Reproductor {
      * cuenta: AudioFlinger no la hace sonar hasta llenarla.
      */
     private boolean salidaTrabada(long ahoraNs) {
+        if (sinVigilarHastaNs != 0) {
+            if (ahoraNs - sinVigilarHastaNs < 0) {
+                return false;
+            }
+            sinVigilarHastaNs = 0;
+            vigilarPosicion = false;
+        }
         int posicion = salida.framesReproducidos();
         if (!vigilarPosicion) {
             vigilarPosicion = true;
@@ -445,6 +469,9 @@ public final class Reproductor {
             boolean atras = posicion - ultimaPosicion < 0;
             ultimaPosicion = posicion;
             posicionDesdeNs = ahoraNs;
+            if (!atras) {
+                reaperturasSeguidas = 0; // suena
+            }
             return atras;
         }
         return ahoraNs - posicionDesdeNs > SALIDA_TRABADA_NS;

@@ -161,7 +161,7 @@ public class SesionReceptorTest {
         assertTrue(sesion.tickEstado(System.nanoTime()));
         assertTrue(!respuestas().contains(Protocolo.STATE));
         reproductor.paso(System.nanoTime());
-        assertTrue(sesion.tickEstado(System.nanoTime())); // ahora sale enseguida
+        assertTrue(sesion.tickEstado(System.nanoTime() + 20000000L)); // sale en el próximo intento (10 ms)
         java.util.List<Integer> r = respuestas();
         assertEquals(Integer.valueOf(Protocolo.HELLO), r.get(0));
         assertTrue(r.contains(Protocolo.PONG));
@@ -244,5 +244,17 @@ public class SesionReceptorTest {
         emisor.control(Protocolo.CONTROL_DETENER);
         procesar(3);
         assertFalse(reproductor.pausado());
+    }
+
+    /** Si el hilo de audio no pone las métricas en cero, el primer STATE sale igual a los 500 ms. */
+    @Test
+    public void elPrimerStateNoEsperaParaSiempre() throws IOException {
+        procesar(0);
+        long t0 = System.nanoTime();
+        assertTrue(sesion.tickEstado(t0 + 100000000L));
+        assertTrue(!respuestas().contains(Protocolo.STATE));
+        assertTrue(sesion.nanosHastaEstado(t0 + 100000000L) > 0); // sin sondear a 1 kHz
+        assertTrue(sesion.tickEstado(t0 + 600000000L));
+        assertTrue(respuestas().contains(Protocolo.STATE));
     }
 }

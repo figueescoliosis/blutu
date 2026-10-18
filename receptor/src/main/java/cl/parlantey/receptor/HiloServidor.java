@@ -56,6 +56,8 @@ final class HiloServidor extends Thread {
     private volatile boolean activo = true;
     /** "Detener receptor": cada conexión (también una recién aceptada) se despide con BYE(0). */
     private volatile boolean despidiendo;
+    /** Desde que accept() devuelve un socket hasta que se cierra. */
+    private volatile boolean atendiendo;
     private volatile Closeable abierto;
     private volatile SesionReceptor sesion;
 
@@ -89,10 +91,12 @@ final class HiloServidor extends Thread {
             } catch (IOException ignorada) {
                 // Se cierra igual.
             }
-            long fin = System.nanoTime() + ESPERA_DESPEDIDA_NS;
-            while (sesion == s && System.nanoTime() - fin < 0) {
-                dormir(50); // el emisor cierra al recibir BYE: la lectura termina sola
-            }
+        }
+        // Una conexión en curso (también una recién aceptada, que se despide sola en atender)
+        // termina cuando el emisor cierra al recibir el BYE: no cerrar el socket antes.
+        long fin = System.nanoTime() + ESPERA_DESPEDIDA_NS;
+        while (atendiendo && System.nanoTime() - fin < 0) {
+            dormir(50);
         }
         detener();
     }
@@ -111,6 +115,7 @@ final class HiloServidor extends Thread {
                 }
                 oyente.esperando();
                 socket = servidor.accept();
+                atendiendo = true;
             } catch (IOException e) {
                 if (!activo) {
                     break;
@@ -140,6 +145,10 @@ final class HiloServidor extends Thread {
             }
             cerrar(socket);
             abierto = null;
+            atendiendo = false;
+            if (despidiendo) {
+                break; // "Detener receptor": no aceptar otra conexión
+            }
         }
     }
 

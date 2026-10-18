@@ -26,6 +26,8 @@ final class SalidaFalsa implements Salida {
     boolean escrituraRota;
     /** La posición no avanza (AudioFlinger colgado) hasta que se vuelva a abrir. */
     boolean trabada;
+    /** Como {@link #trabada}, pero reabrir tampoco la arregla. */
+    boolean trabadaSiempre;
 
     // Estado.
     private Thread hilo;
@@ -34,6 +36,7 @@ final class SalidaFalsa implements Salida {
     private int canales;
     private boolean sonando;
     private boolean llenando;
+    private boolean pausada;
     private long pendiente; // frames escritos que aún no suenan
     private int posicion;
     private long nanosAcumulados;
@@ -97,6 +100,7 @@ final class SalidaFalsa implements Salida {
         aperturas++;
         abierta = true;
         trabada = false;
+        pausada = false;
         this.tasa = tasa;
         this.canales = canales;
         sonando = false;
@@ -158,12 +162,23 @@ final class SalidaFalsa implements Salida {
     @Override
     public void reproducir() {
         hilo();
+        if (pausada) {
+            // AudioFlinger 2.3 saca de las activas a una pista en pausa; al reanudarla
+            // (addTrack_l) vuelve a FS_FILLING: no suena hasta llenarse otra vez.
+            pausada = false;
+            if (pendiente < capacidad) {
+                llenando = true;
+            }
+        }
         sonando = true;
     }
 
     @Override
     public void pausar() {
         hilo();
+        if (sonando) {
+            pausada = true;
+        }
         sonando = false;
     }
 
@@ -171,6 +186,7 @@ final class SalidaFalsa implements Salida {
     public void vaciar() {
         hilo();
         sonando = false;
+        pausada = false;
         vaciados++;
         if (vigilarAlVaciar) {
             vigilar = true;
@@ -196,7 +212,7 @@ final class SalidaFalsa implements Salida {
     /** Avanza el tiempo virtual: el mezclador consume de a {@code granularidad} frames. */
     void avanzar(long nanos) {
         nanosAcumulados += nanos;
-        if (!abierta || !sonando || llenando || trabada) {
+        if (!abierta || !sonando || llenando || trabada || trabadaSiempre) {
             return;
         }
         fraccion += nanos * tasa;
