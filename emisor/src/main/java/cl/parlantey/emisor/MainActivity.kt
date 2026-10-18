@@ -36,6 +36,10 @@ class MainActivity : ComponentActivity() {
     private val pedirEncender =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.refrescar() }
 
+    /** Selector de documentos con varios a la vez; el permiso de lectura se hace persistente. */
+    private val elegirCanciones =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.agregarCanciones(it) }
+
     /** Encender o apagar el Bluetooth desde Ajustes rápidos no pausa la Activity. */
     private val cambiosBluetooth = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = vm.refrescar()
@@ -56,7 +60,16 @@ class MainActivity : ComponentActivity() {
             elegirPreset = vm::elegirPreset,
             elegirTasa = vm::elegirTasa,
             iniciarTono = vm::iniciarTono,
-            detenerTono = vm::detenerTono,
+            detenerAudio = vm::detenerAudio,
+            // audio/* no cubre los .ogg/.opus/.flac que algunos proveedores declaran como application/*.
+            agregarCanciones = { elegirCanciones.launch(TIPOS_AUDIO) },
+            vaciarCola = vm::vaciarCola,
+            reproducir = vm::reproducir,
+            alternarPausa = vm::alternarPausa,
+            siguiente = vm::siguiente,
+            anterior = vm::anterior,
+            copiarMusica = { copiar(vm.textoNotasFase3()) },
+            borrarMusica = vm::borrarMusica,
             copiarMediciones = { copiar(vm.textoParaNotas()) },
             borrarMediciones = vm::borrarMediciones,
             copiarPruebasTono = { copiar(vm.textoNotasFase2()) },
@@ -119,6 +132,10 @@ class MainActivity : ComponentActivity() {
 
     private fun abrirAjustesApp() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+    }
+
+    private companion object {
+        val TIPOS_AUDIO = arrayOf("audio/*", "application/ogg", "application/x-flac", "application/flac")
     }
 
     private fun copiar(texto: String) {

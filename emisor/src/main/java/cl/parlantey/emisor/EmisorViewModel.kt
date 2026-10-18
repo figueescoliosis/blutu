@@ -7,17 +7,20 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cl.parlantey.core.Protocolo
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 /** Lo que solo sabe la UI: permisos, Bluetooth, vinculados y lo elegido. */
 data class Local(
@@ -30,9 +33,15 @@ data class Local(
     val tasa: Int = 48000,
     /** Error o aviso del servicio que el usuario ya cerró. */
     val descartado: String? = null,
+    /** Leyendo los metadatos de las canciones recién elegidas. */
+    val agregando: Boolean = false,
 )
 
-data class UiEstado(val local: Local = Local(), val servicio: EstadoServicio = EstadoServicio()) {
+data class UiEstado(
+    val local: Local = Local(),
+    val servicio: EstadoServicio = EstadoServicio(),
+    val canciones: List<Cancion> = emptyList(),
+) {
     val error: String? get() = servicio.error?.takeIf { it != local.descartado }
     val aviso: String? get() = servicio.aviso?.takeIf { it != local.descartado }
 }
@@ -47,8 +56,17 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val local = MutableStateFlow(Local(btDisponible = adaptador != null))
 
-    val ui: StateFlow<UiEstado> = combine(local, EstadoEmisor.estado, ::UiEstado)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, UiEstado(local.value, EstadoEmisor.estado.value))
+    init {
+        Almacen.iniciar(app)
+        ColaMusica.cargar(app)
+    }
+
+    val ui: StateFlow<UiEstado> = combine(local, EstadoEmisor.estado, ColaMusica.canciones, ::UiEstado)
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            UiEstado(local.value, EstadoEmisor.estado.value, ColaMusica.canciones.value),
+        )
 
     fun tienePermiso(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
@@ -91,11 +109,52 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
             .putExtra(ServicioEmisor.EXTRA_TASA, local.value.tasa),
     )
 
-    fun detenerTono() = enviar(intent(ServicioEmisor.ACCION_DETENER_TONO))
+    fun detenerAudio() = enviar(intent(ServicioEmisor.ACCION_DETENER_AUDIO))
+
+    // --- Música.
+
+    fun agregarCanciones(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        local.update { it.copy(agregando = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                ColaMusica.agregar(getApplication(), uris)
+            } finally {
+                local.update { it.copy(agregando = false) }
+            }
+            enviar(intent(ServicioEmisor.ACCION_COLA))
+        }
+    }
+
+    fun vaciarCola() {
+        enviar(intent(ServicioEmisor.ACCION_DETENER_AUDIO))
+        viewModelScope.launch(Dispatchers.IO) {
+            ColaMusica.vaciar(getApplication())
+            enviar(intent(ServicioEmisor.ACCION_COLA))
+        }
+    }
+
+    fun reproducir(indice: Int) = enviar(
+        intent(ServicioEmisor.ACCION_REPRODUCIR)
+            .putExtra(ServicioEmisor.EXTRA_INDICE, indice)
+            .putExtra(ServicioEmisor.EXTRA_PRESET, local.value.opcion.name),
+    )
+
+    fun alternarPausa() = enviar(intent(ServicioEmisor.ACCION_PAUSA))
+
+    fun siguiente() = enviar(intent(ServicioEmisor.ACCION_SIGUIENTE))
+
+    fun anterior() = enviar(intent(ServicioEmisor.ACCION_ANTERIOR))
 
     fun elegirWifi(w: WifiGalaxy) = local.update { it.copy(wifi = w) }
 
-    fun elegirPreset(o: OpcionPreset) = local.update { it.copy(opcion = o) }
+    /** Con música sonando, el preset nuevo se aplica ya (sigue desde el mismo punto). */
+    fun elegirPreset(o: OpcionPreset) {
+        local.update { it.copy(opcion = o) }
+        if (EstadoEmisor.estado.value.reproduccion?.modo == Modo.MUSICA) {
+            enviar(intent(ServicioEmisor.ACCION_PRESET).putExtra(ServicioEmisor.EXTRA_PRESET, o.name))
+        }
+    }
 
     fun elegirTasa(t: Int) = local.update { it.copy(tasa = t) }
 
@@ -106,6 +165,8 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
     fun borrarPruebasTono() = EstadoEmisor.actualizar { e ->
         e.copy(pruebasTono = e.pruebasTono.filter { !it.terminado })
     }
+
+    fun borrarMusica() = EstadoEmisor.actualizar { e -> e.copy(musica = e.musica.filter { !it.terminado }) }
 
     private fun intent(accion: String) = Intent(getApplication(), ServicioEmisor::class.java).setAction(accion)
 
@@ -154,6 +215,36 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
     }
+
+    /** Sesiones de música (Fase 3) en formato de tabla Markdown. */
+    fun textoNotasFase3(): String = buildString {
+        appendLine(cabecera())
+        appendLine()
+        appendLine(
+            "| Inicio | Duración | Pistas | Tipos | Preset | Formatos | Cortes | Buffer mín/prom/máx (ms) | " +
+                "Reconexiones | Pausa → STATE (ms) | Siguiente → STATE (ms) | Completa |",
+        )
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for (r in EstadoEmisor.estado.value.musica) {
+            val dur = (r.hastaMs - r.desdeMs) / 1000
+            val buffer = if (r.muestrasBuffer == 0L) "—" else "${r.bufferMinMs}/${r.bufferPromMs}/${r.bufferMaxMs}"
+            val presets = r.presets.joinToString(", ").ifEmpty { "—" } + if (r.opcion == OpcionPreset.AUTO) " (Auto)" else ""
+            val completa = when {
+                !r.terminado -> "en curso"
+                r.completa -> "sí"
+                else -> "no (detenida)"
+            }
+            appendLine(
+                "| ${r.inicio} | ${"%d:%02d".format(dur / 60, dur % 60)} | ${r.pistas.size}" +
+                    "${if (r.errores > 0) " (${r.errores} sin abrir)" else ""} | ${r.tipos.joinToString(", ").ifEmpty { "—" }} | " +
+                    "$presets | ${r.formatos.joinToString(", ").ifEmpty { "—" }} | ${r.cortes} | $buffer | ${r.reconexiones} | " +
+                    "${latencias(r.pausasMs)} | ${latencias(r.siguientesMs)} | $completa |",
+            )
+        }
+    }
+
+    private fun latencias(ms: List<Long>): String =
+        if (ms.isEmpty()) "—" else "${ms.joinToString(", ")} (máx ${ms.max()})"
 
     private fun versionApp(): String {
         val app = getApplication<Application>()

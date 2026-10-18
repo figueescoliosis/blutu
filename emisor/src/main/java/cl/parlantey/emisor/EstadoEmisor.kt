@@ -64,6 +64,16 @@ sealed interface Enlace {
     data class BluetoothApagado(val dispositivo: Dispositivo) : Enlace
 }
 
+/** El receptor de la sesión (null si no hay). */
+val Enlace.dispositivo: Dispositivo?
+    get() = when (this) {
+        Enlace.Inactivo -> null
+        is Enlace.Conectando -> dispositivo
+        is Enlace.Conectado -> dispositivo
+        is Enlace.Reconectando -> dispositivo
+        is Enlace.BluetoothApagado -> dispositivo
+    }
+
 /** Último STATE del receptor y el nivel estimado por el control de flujo. */
 data class EnVivo(
     val bufferMs: Long,
@@ -73,14 +83,29 @@ data class EnVivo(
     val ultimoSeq: Long,
 )
 
-/** Tono de prueba en curso (sigue vivo durante las reconexiones). */
-data class Tono(
+enum class Modo { TONO, MUSICA }
+
+/** Lo que suena: el tono de prueba o la cola de música (sigue vivo durante las reconexiones). */
+data class Reproduccion(
+    val modo: Modo,
     val opcion: OpcionPreset,
     val preset: Preset,
-    val tasaOrigen: Int,
-    val tasaSalida: Int,
-    val canales: Int,
+    /** Tasa del tono generado (solo tono). */
+    val tasaOrigen: Int = 0,
+    /** Índice en la cola de la canción que suena (música). */
+    val indice: Int = -1,
+    val titulo: String = "",
+    val artista: String = "",
+    val posicionMs: Long = 0,
+    val duracionMs: Long = 0,
+    val pausado: Boolean = false,
+    /** Abriendo una canción para que empiece a sonar. */
+    val abriendo: Boolean = false,
+    val tasaSalida: Int = 0,
+    val canales: Int = 0,
     val vivo: EnVivo? = null,
+    /** Última canción que no se pudo abrir (se saltó). */
+    val error: String? = null,
 )
 
 /** Resumen de una prueba de tono, para «Copiar para NOTAS (Fase 2)». */
@@ -105,6 +130,34 @@ data class ResumenTono(
     val bufferPromMs: Long get() = if (muestrasBuffer == 0L) 0 else bufferSumaMs / muestrasBuffer
 }
 
+/** Resumen de una sesión de música, para «Copiar para NOTAS (Fase 3)». */
+data class ResumenMusica(
+    val inicio: String,
+    val desdeMs: Long,
+    val hastaMs: Long,
+    val opcion: OpcionPreset,
+    val presets: List<String> = emptyList(),
+    /** Índices de la cola que sonaron, sin repetir, en orden. */
+    val pistas: List<Int> = emptyList(),
+    val tipos: List<String> = emptyList(),
+    val formatos: List<String> = emptyList(),
+    val cortes: Long = 0,
+    val bufferMinMs: Long = Long.MAX_VALUE,
+    val bufferMaxMs: Long = 0,
+    val bufferSumaMs: Long = 0,
+    val muestrasBuffer: Long = 0,
+    val reconexiones: Int = 0,
+    /** Desde el toque hasta el STATE que lo confirma (granularidad: 250 ms). */
+    val pausasMs: List<Long> = emptyList(),
+    val siguientesMs: List<Long> = emptyList(),
+    val errores: Int = 0,
+    /** La cola sonó hasta el final (no se detuvo antes). */
+    val completa: Boolean = false,
+    val terminado: Boolean = false,
+) {
+    val bufferPromMs: Long get() = if (muestrasBuffer == 0L) 0 else bufferSumaMs / muestrasBuffer
+}
+
 data class Medicion(
     val hora: String,
     val receptor: String,
@@ -123,15 +176,20 @@ data class Medicion(
 
 data class EstadoServicio(
     val enlace: Enlace = Enlace.Inactivo,
-    val tono: Tono? = null,
+    val reproduccion: Reproduccion? = null,
     val pruebasTono: List<ResumenTono> = emptyList(),
+    val musica: List<ResumenMusica> = emptyList(),
     val mediciones: List<Medicion> = emptyList(),
+    /** KB/s de la última prueba de enlace con cada receptor (por dirección): base del preset Auto. */
+    val kBpsPorReceptor: Map<String, Double> = emptyMap(),
     val error: String? = null,
     /** El cierre no fue un error (p. ej. "El receptor se detuvo"). */
     val aviso: String? = null,
 ) {
-    /** KB/s de la última prueba de enlace (NaN si no hay): base del preset Auto. */
-    val ultimoKBps: Double get() = mediciones.lastOrNull()?.kBpsReceptor ?: Double.NaN
+    /** KB/s guardados del receptor de la sesión (NaN si no hay). */
+    val ultimoKBps: Double get() = enlace.dispositivo?.let { kBps(it.direccion) } ?: Double.NaN
+
+    fun kBps(direccion: String): Double = kBpsPorReceptor[direccion] ?: Double.NaN
 }
 
 /** Estado del emisor. Solo lo escribe [ServicioEmisor] (y su supervisor); la UI lo lee. */

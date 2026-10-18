@@ -72,6 +72,8 @@ class ServicioEmisor : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Almacen.iniciar(this)
+        ColaMusica.cargar(this)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CANAL, "Conexión con el receptor", NotificationManager.IMPORTANCE_LOW).apply {
@@ -90,8 +92,8 @@ class ServicioEmisor : Service() {
         )
         // La notificación cambia solo en las transiciones, no con cada STATE.
         alcance.launch {
-            EstadoEmisor.estado.map(::textoNotificacion).distinctUntilChanged().collect { (titulo, texto) ->
-                if (enPrimerPlano) nm.notify(ID_NOTIFICACION, notificacion(titulo, texto))
+            EstadoEmisor.estado.map(::textoNotificacion).distinctUntilChanged().collect { t ->
+                if (enPrimerPlano) nm.notify(ID_NOTIFICACION, notificacion(t))
             }
         }
         // Con el Bluetooth apagado la espera puede durar horas: sin wake lock hasta que se encienda.
@@ -112,7 +114,20 @@ class ServicioEmisor : Service() {
                     intent.getIntExtra(EXTRA_TASA, 48000),
                 ),
             )
-            ACCION_DETENER_TONO -> supervisor?.comando(Comando.DetenerTono)
+            ACCION_DETENER_AUDIO -> supervisor?.comando(Comando.DetenerAudio)
+            ACCION_REPRODUCIR -> supervisor?.comando(
+                Comando.Reproducir(
+                    intent.getIntExtra(EXTRA_INDICE, 0),
+                    OpcionPreset.valueOf(intent.getStringExtra(EXTRA_PRESET) ?: OpcionPreset.AUTO.name),
+                ),
+            )
+            ACCION_PAUSA -> supervisor?.comando(Comando.AlternarPausa)
+            ACCION_SIGUIENTE -> supervisor?.comando(Comando.Siguiente)
+            ACCION_ANTERIOR -> supervisor?.comando(Comando.Anterior)
+            ACCION_PRESET -> supervisor?.comando(
+                Comando.CambiarPreset(OpcionPreset.valueOf(intent.getStringExtra(EXTRA_PRESET) ?: OpcionPreset.AUTO.name)),
+            )
+            ACCION_COLA -> supervisor?.comando(Comando.ColaCambiada)
             ACCION_PROBAR -> supervisor?.comando(
                 Comando.Probar(WifiGalaxy.valueOf(intent.getStringExtra(EXTRA_WIFI) ?: WifiGalaxy.SIN_DATO.name)),
             )
@@ -125,12 +140,11 @@ class ServicioEmisor : Service() {
         // startForeground una sola vez, lo primero y antes de cualquier E/S: tras
         // startForegroundService, Android lo exige aunque el pedido no sirva.
         if (!enPrimerPlano) {
-            val (titulo, texto) = textoNotificacion(EstadoEmisor.estado.value)
             try {
                 ServiceCompat.startForeground(
                     this,
                     ID_NOTIFICACION,
-                    notificacion(titulo, texto),
+                    notificacion(textoNotificacion(EstadoEmisor.estado.value)),
                     // El tipo existe desde API 29; antes, ServiceCompat lo ignora.
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0,
                 )
@@ -152,7 +166,7 @@ class ServicioEmisor : Service() {
         val d = Dispositivo(intent.getStringExtra(EXTRA_NOMBRE) ?: direccion, direccion)
         EstadoEmisor.actualizar { it.copy(error = null, aviso = null) }
         getSystemService(NotificationManager::class.java).cancel(ID_FIN)
-        val s = Supervisor(adaptador, d) { principal.post(::alTerminarSupervisor) }
+        val s = Supervisor(applicationContext, adaptador, d) { principal.post(::alTerminarSupervisor) }
         supervisor = s
         actualizarWakeLock(true)
         s.iniciar()
@@ -224,38 +238,63 @@ class ServicioEmisor : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun textoNotificacion(e: EstadoServicio): Pair<String, String> {
-        val tono = e.tono?.let { "Tono 440 Hz · ${it.preset.nombre}" }
+    /** Lo que muestra la notificación (cambia solo en las transiciones, no con la posición). */
+    private data class TextoNotificacion(val titulo: String, val texto: String, val musica: Boolean, val pausado: Boolean)
+
+    private fun textoNotificacion(e: EstadoServicio): TextoNotificacion {
+        val r = e.reproduccion
+        val musica = r?.modo == Modo.MUSICA
+        val pausado = r?.pausado == true
+        val sonando = when {
+            r == null -> null
+            r.modo == Modo.TONO -> "Tono 440 Hz · ${r.preset.nombre}"
+            else -> listOf(r.artista, if (pausado) "en pausa" else "", r.preset.nombre).filter { it.isNotEmpty() }
+                .joinToString(" · ")
+        }
+        val titulo = r?.takeIf { musica }?.titulo?.ifEmpty { null }
         return when (val enlace = e.enlace) {
-            Enlace.Inactivo -> "ParlanteY" to "Iniciando…"
-            is Enlace.Conectando -> "Conectando con ${enlace.dispositivo.nombre}…" to (tono ?: "")
-            is Enlace.Conectado -> "Conectado a ${enlace.dispositivo.nombre}" to (tono ?: "Listo para enviar audio")
-            is Enlace.Reconectando ->
-                "Reconectando con ${enlace.dispositivo.nombre} (intento ${enlace.intento})" to enlace.causa
-            is Enlace.BluetoothApagado -> "Bluetooth apagado" to "Se reconecta solo al encenderlo"
+            Enlace.Inactivo -> TextoNotificacion("ParlanteY", "Iniciando…", false, false)
+            is Enlace.Conectando ->
+                TextoNotificacion("Conectando con ${enlace.dispositivo.nombre}…", sonando ?: "", musica, pausado)
+            is Enlace.Conectado -> TextoNotificacion(
+                titulo ?: "Conectado a ${enlace.dispositivo.nombre}",
+                sonando ?: "Listo para enviar audio",
+                musica,
+                pausado,
+            )
+            is Enlace.Reconectando -> TextoNotificacion(
+                "Reconectando con ${enlace.dispositivo.nombre} (intento ${enlace.intento})", enlace.causa, musica, pausado,
+            )
+            is Enlace.BluetoothApagado ->
+                TextoNotificacion("Bluetooth apagado", "Se reconecta solo al encenderlo", musica, pausado)
         }
     }
 
+    private fun accion(codigo: Int, accion: String): PendingIntent = PendingIntent.getService(
+        this,
+        codigo,
+        Intent(this, ServicioEmisor::class.java).setAction(accion),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     @SuppressLint("LaunchActivityFromNotification")
-    private fun notificacion(titulo: String, texto: String): Notification {
+    private fun notificacion(t: TextoNotificacion): Notification {
         val abrir = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val detener = PendingIntent.getService(
-            this,
-            1,
-            Intent(this, ServicioEmisor::class.java).setAction(ACCION_DETENER),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        return NotificationCompat.Builder(this, CANAL)
+        val b = NotificationCompat.Builder(this, CANAL)
             .setSmallIcon(R.drawable.ic_notificacion)
-            .setContentTitle(titulo)
-            .setContentText(texto)
+            .setContentTitle(t.titulo)
+            .setContentText(t.texto)
             .setContentIntent(abrir)
-            .addAction(0, "Detener", detener)
+        if (t.musica) {
+            b.addAction(0, if (t.pausado) "Reanudar" else "Pausa", accion(3, ACCION_PAUSA))
+            b.addAction(0, "Siguiente", accion(4, ACCION_SIGUIENTE))
+        }
+        return b.addAction(0, "Detener", accion(1, ACCION_DETENER))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -268,7 +307,14 @@ class ServicioEmisor : Service() {
         const val ACCION_CONECTAR = "cl.parlantey.emisor.CONECTAR"
         const val ACCION_DETENER = "cl.parlantey.emisor.DETENER"
         const val ACCION_TONO = "cl.parlantey.emisor.TONO"
-        const val ACCION_DETENER_TONO = "cl.parlantey.emisor.DETENER_TONO"
+        const val ACCION_DETENER_AUDIO = "cl.parlantey.emisor.DETENER_AUDIO"
+        const val ACCION_REPRODUCIR = "cl.parlantey.emisor.REPRODUCIR"
+        const val ACCION_PAUSA = "cl.parlantey.emisor.PAUSA"
+        const val ACCION_SIGUIENTE = "cl.parlantey.emisor.SIGUIENTE"
+        const val ACCION_ANTERIOR = "cl.parlantey.emisor.ANTERIOR"
+        const val ACCION_PRESET = "cl.parlantey.emisor.PRESET"
+        const val ACCION_COLA = "cl.parlantey.emisor.COLA"
+        const val EXTRA_INDICE = "indice"
         const val ACCION_PROBAR = "cl.parlantey.emisor.PROBAR"
         const val EXTRA_NOMBRE = "nombre"
         const val EXTRA_DIRECCION = "direccion"

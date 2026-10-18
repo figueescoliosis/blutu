@@ -1,36 +1,66 @@
 package cl.parlantey.emisor
 
 import android.bluetooth.BluetoothAdapter
+import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import cl.parlantey.core.ByeRecibidoException
+import cl.parlantey.core.CodificadorPista
+import cl.parlantey.core.ControlCola
+import cl.parlantey.core.Estado
+import cl.parlantey.core.FlujoEmisor
 import cl.parlantey.core.FuenteTono
 import cl.parlantey.core.Hello
-import cl.parlantey.core.PipelineEmisor
 import cl.parlantey.core.Protocolo
 import cl.parlantey.core.ProtocoloException
 import cl.parlantey.core.ResultadoPrueba
+import cl.parlantey.core.Seq
 import cl.parlantey.core.SesionEmisor
-import cl.parlantey.core.Track
 import cl.parlantey.core.VersionIncompatibleException
 import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 
-/** Pedidos de la UI al hilo de E/S. */
+/** Pedidos de la UI (y de la notificación) al hilo de E/S. */
 sealed interface Comando {
     data class IniciarTono(val opcion: OpcionPreset, val tasa: Int) : Comando
 
-    data object DetenerTono : Comando
+    /** Detiene lo que suene (tono o música); la conexión sigue. */
+    data object DetenerAudio : Comando
 
     data class Probar(val wifi: WifiGalaxy) : Comando
+
+    /** Reproduce la canción [indice] de [ColaMusica]. */
+    data class Reproducir(val indice: Int, val opcion: OpcionPreset) : Comando
+
+    data object Pausar : Comando
+
+    data object Reanudar : Comando
+
+    data object AlternarPausa : Comando
+
+    data object Siguiente : Comando
+
+    data object Anterior : Comando
+
+    data class CambiarPreset(val opcion: OpcionPreset) : Comando
+
+    /** Se agregaron canciones (o se vació la cola). */
+    data object ColaCambiada : Comando
 }
 
 /**
  * Supervisor único de la conexión con un receptor. Un hilo ("enlace") hace toda la E/S: conecta,
- * espera el HELLO, da pasos al pipeline del tono, envía un PING por segundo y corre la prueba de
- * enlace. Otro ("vigía") cierra el socket si se vence un plazo o pasan 4 s sin tramas del receptor.
+ * espera el HELLO, da pasos a la cola de reproducción ([ControlCola]: música o tono), envía un
+ * PING por segundo y corre la prueba de enlace. Otro ("vigía") cierra el socket si se vence un
+ * plazo o pasan 4 s sin tramas del receptor. Los archivos se abren en un tercero ("abrir").
+ *
+ * La cola sobrevive a las reconexiones: al volver, la canción sigue desde lo que se escuchó.
+ * En la primera conexión con un receptor sin prueba de enlace guardada, la prueba corre sola
+ * (es la base del preset Auto).
  *
  * | Causa del corte | Acción |
  * |---|---|
@@ -44,6 +74,7 @@ sealed interface Comando {
  * reintenta ~1 s después con el backoff en cero.
  */
 class Supervisor(
+    private val contexto: Context,
     private val adaptador: BluetoothAdapter,
     private val dispositivo: Dispositivo,
     private val alTerminar: () -> Unit,
@@ -60,20 +91,35 @@ class Supervisor(
     /** System.nanoTime límite de la operación en curso (0 = sin plazo). */
     @Volatile private var plazoNs = 0L
 
-    // --- Solo el hilo de enlace (salvo esperandoSonarDesde).
+    private val ejecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "ParlanteY-abrir").apply { isDaemon = true }
+    }
+
+    // --- Solo el hilo de enlace (salvo modo y esperandoSonarDesde).
     private var insecurePrimero = false
-    private var pipeline: PipelineEmisor? = null
-    private var resumen: ResumenTono? = null
-    /** cortes de las conexiones anteriores de la prueba de tono actual. */
+    private val control = ControlCola(FlujoEmisor.OBJETIVO_ARCHIVOS_MS)
+    /** Qué suena (null: nada). */
+    @Volatile private var modo: Modo? = null
+    private var opcion = OpcionPreset.AUTO
+    private var tasaTono = 48000
+    private var canciones: List<Cancion> = emptyList()
+    private var resumenTono: ResumenTono? = null
+    private var resumenMusica: ResumenMusica? = null
+    private var probadoAuto = false
+    /** cortes de las conexiones anteriores de lo que suena. */
     private var cortesPrevios = 0L
     private var cortesConexion = 0L
     /**
-     * STATE.cortes al empezar el tono en esta conexión: el receptor cuenta por conexión, así que
+     * STATE.cortes al empezar a sonar en esta conexión: el receptor cuenta por conexión, así que
      * un segundo tono en la misma conexión no debe heredar los cortes del primero.
      */
     private var cortesBase = 0L
-    /** elapsedRealtime del último STATE_ON con un tono en curso, hasta que vuelve a sonar. */
+    /** elapsedRealtime del último STATE_ON con audio en curso, hasta que vuelve a sonar. */
     @Volatile private var esperandoSonarDesde = 0L
+    // Latencias (elapsedRealtime del toque; 0 = no se mide).
+    private var pausaDesde = 0L
+    private var siguienteDesde = 0L
+    private var numeroAlPedir = 0L
 
     fun iniciar() {
         hiloEnlace.start()
@@ -97,7 +143,7 @@ class Supervisor(
 
     fun bluetoothEncendido() {
         btEncendido = true
-        if (pipeline != null || resumen?.terminado == false) esperandoSonarDesde = SystemClock.elapsedRealtime()
+        if (modo != null) esperandoSonarDesde = SystemClock.elapsedRealtime()
         synchronized(monitor) { monitor.notifyAll() }
     }
 
@@ -149,7 +195,7 @@ class Supervisor(
                     sesion = null
                     conexion = null
                     c.cerrar()
-                    pipeline?.desconectar()
+                    control.desconectar() // la canción retoma al reconectar
                 }
                 if (detenido || falla == null) break
                 val reintentar = clasificar(c.causaLector() ?: falla, falla, huboHello, c) ?: break
@@ -172,7 +218,9 @@ class Supervisor(
             Log.e(TAG, "supervisor", t)
             terminar("Error inesperado: $t")
         } finally {
-            terminarTono()
+            control.detener() // sin conexión no envía nada: solo cierra los archivos
+            finAudio(null, completa = false)
+            ejecutor.shutdownNow()
             publicarEnlace(Enlace.Inactivo)
             alTerminar()
         }
@@ -238,11 +286,19 @@ class Supervisor(
         cortesPrevios += cortesConexion
         cortesConexion = 0
         cortesBase = 0
-        pipeline?.let { p ->
-            // Reconexión con el tono en curso: CONFIG + TRACK de nuevo y sigue sonando.
-            p.conectar(s.escritor(), s::estado)
+        // Reconexión con audio en curso: CONFIG + TRACK de nuevo y sigue desde lo que se escuchó.
+        control.conectar(s.escritor(), s::estado)
+        if (modo != null) {
             s.setAudioActivo(true)
-            resumen = resumen?.copy(reconexiones = resumen!!.reconexiones + 1)
+            resumenTono = resumenTono?.let { it.copy(reconexiones = it.reconexiones + 1) }
+            resumenMusica = resumenMusica?.let { it.copy(reconexiones = it.reconexiones + 1) }
+        }
+        val kBpsGuardados = EstadoEmisor.estado.value.kBps(dispositivo.direccion)
+        if (!probadoAuto && modo == null && kBpsGuardados.isNaN()) {
+            // Primera vez con este receptor: la prueba de enlace decide el preset Auto.
+            probadoAuto = true
+            Log.i(TAG, "sin prueba de enlace guardada para ${dispositivo.nombre}: se mide ahora")
+            enlace = atender(Comando.Probar(WifiGalaxy.SIN_DATO), s, hello, enlace)
         }
         var proximoPing = 0L
         var estadosVistos = -1L
@@ -269,18 +325,27 @@ class Supervisor(
                 }
             }
             var espera = ESPERA_INACTIVO_MS
-            val p = pipeline
-            if (p != null) {
-                espera = p.paso(ahora)
-                if (espera == PipelineEmisor.FIN) {
-                    finTono(s)
-                    espera = 0
+            if (modo != null) {
+                espera = control.paso(ahora)
+                if (espera == FlujoEmisor.FIN) {
+                    espera = when {
+                        control.abriendo() -> ESPERA_ABRIENDO_MS
+                        control.finalizada() || control.flujo().detenido() -> {
+                            val completa = control.finalizada()
+                            if (control.flujo().detenido() && control.errores() > 0) {
+                                publicar { it.copy(aviso = control.ultimoError()) }
+                            }
+                            finAudio(s, completa)
+                            0
+                        }
+                        else -> ESPERA_INACTIVO_MS
+                    }
                 }
             }
             val n = s.estadosRecibidos()
             if (n != estadosVistos) {
                 estadosVistos = n
-                alRecibirEstado(s, pipeline)
+                alRecibirEstado(s)
             }
             if (espera > 0) {
                 val hastaPing = (proximoPing - System.nanoTime()) / 1_000_000L
@@ -290,75 +355,152 @@ class Supervisor(
         }
     }
 
-    private fun atender(c: Comando, s: SesionEmisor, hello: Hello, enlace: Enlace.Conectado): Enlace.Conectado =
+    private fun atender(c: Comando, s: SesionEmisor, hello: Hello, enlace: Enlace.Conectado): Enlace.Conectado {
         when (c) {
-            is Comando.IniciarTono -> {
-                pipeline?.let {
-                    it.pedirDetener()
-                    it.paso(System.nanoTime()) // envía DETENER
-                    finTono(s)
-                }
-                val kBps = EstadoEmisor.estado.value.ultimoKBps
-                val preset = c.opcion.resolver(kBps)
-                val p = PipelineEmisor(
-                    FuenteTono(c.tasa, 2),
-                    preset,
-                    Track("Tono de prueba", "440 Hz", 0),
-                    PipelineEmisor.OBJETIVO_ARCHIVOS_MS,
-                )
-                p.conectar(s.escritor(), s::estado)
-                s.setAudioActivo(true)
-                pipeline = p
-                cortesPrevios = 0
-                cortesConexion = 0
-                cortesBase = s.estado()?.cortes ?: 0
-                esperandoSonarDesde = 0
-                val cfg = p.config()
-                val r = ResumenTono(
-                    inicio = LocalDateTime.now().format(FORMATO_HORA),
-                    desdeMs = SystemClock.elapsedRealtime(),
-                    hastaMs = SystemClock.elapsedRealtime(),
-                    preset = preset,
-                    opcion = c.opcion,
-                    tasaSalida = cfg.sampleRate,
-                    canales = cfg.canales,
-                )
-                resumen = r
-                publicar {
-                    it.copy(
-                        tono = Tono(c.opcion, preset, c.tasa, cfg.sampleRate, cfg.canales),
-                        pruebasTono = it.pruebasTono + r,
-                    )
-                }
-                Log.i(TAG, "tono: $preset, ${c.tasa} Hz → ${cfg.sampleRate} Hz × ${cfg.canales}")
-                enlace
+            is Comando.IniciarTono -> iniciarTono(s, c)
+            Comando.DetenerAudio -> if (modo != null) detenerAudio(s)
+            is Comando.Probar -> return probar(s, hello, enlace, c.wifi)
+            is Comando.Reproducir -> reproducir(s, c)
+            Comando.Pausar -> pausar()
+            Comando.Reanudar -> reanudar()
+            Comando.AlternarPausa -> if (control.pausado()) reanudar() else pausar()
+            Comando.Siguiente -> if (modo == Modo.MUSICA) {
+                medirSiguiente()
+                control.siguiente()
             }
-            Comando.DetenerTono -> {
-                pipeline?.pedirDetener()
-                enlace
+            Comando.Anterior -> if (modo == Modo.MUSICA) {
+                medirSiguiente()
+                control.anterior()
             }
-            is Comando.Probar -> {
-                if (pipeline != null) {
-                    enlace
-                } else {
-                    val midiendo = enlace.copy(midiendo = true)
-                    publicar { it.copy(enlace = midiendo) }
-                    plazo(TIEMPO_PRUEBA_MS)
-                    val r = s.probarEnlace(PINGS_PRUEBA, DURACION_PRUEBA_MS, SesionEmisor.LARGO_TRAMA_PRUEBA)
-                    plazo(0)
-                    val m = medicion(r, hello.nombre, c.wifi)
-                    val listo = enlace.copy(midiendo = false, rttMs = r.rttPromMs())
-                    publicar { it.copy(enlace = listo, mediciones = it.mediciones + m) }
-                    listo
-                }
+            is Comando.CambiarPreset -> {
+                opcion = c.opcion
+                if (modo == Modo.MUSICA) control.cambiarPreset(opcion.resolver(kBps()))
             }
+            Comando.ColaCambiada -> colaCambiada(s)
         }
+        if (modo != null) publicarReproduccion(null)
+        return enlace
+    }
 
-    private fun alRecibirEstado(s: SesionEmisor, p: PipelineEmisor?) {
+    private fun kBps(): Double = EstadoEmisor.estado.value.kBps(dispositivo.direccion)
+
+    private fun probar(s: SesionEmisor, hello: Hello, enlace: Enlace.Conectado, wifi: WifiGalaxy): Enlace.Conectado {
+        if (modo != null) return enlace // con audio en curso no se puede
+        val midiendo = enlace.copy(midiendo = true)
+        publicar { it.copy(enlace = midiendo) }
+        plazo(TIEMPO_PRUEBA_MS)
+        val r = s.probarEnlace(PINGS_PRUEBA, DURACION_PRUEBA_MS, SesionEmisor.LARGO_TRAMA_PRUEBA)
+        plazo(0)
+        val m = medicion(r, hello.nombre, wifi)
+        val listo = enlace.copy(midiendo = false, rttMs = r.rttPromMs())
+        publicar {
+            it.copy(
+                enlace = listo,
+                mediciones = it.mediciones + m,
+                kBpsPorReceptor = it.kBpsPorReceptor + (dispositivo.direccion to m.kBpsReceptor),
+            )
+        }
+        return listo
+    }
+
+    private fun iniciarTono(s: SesionEmisor, c: Comando.IniciarTono) {
+        if (modo != null) detenerAudio(s)
+        val preset = c.opcion.resolver(kBps())
+        opcion = c.opcion
+        tasaTono = c.tasa
+        control.cola(FabricaTono(c.tasa))
+        control.preset(preset)
+        control.reproducir(0, 0)
+        empezarAudio(s, Modo.TONO)
+        val cfg = CodificadorPista(FuenteTono(c.tasa, 2), preset).config(FlujoEmisor.OBJETIVO_ARCHIVOS_MS)
+        val ahora = SystemClock.elapsedRealtime()
+        val r = ResumenTono(
+            inicio = LocalDateTime.now().format(FORMATO_HORA),
+            desdeMs = ahora,
+            hastaMs = ahora,
+            preset = preset,
+            opcion = c.opcion,
+            tasaSalida = cfg.sampleRate,
+            canales = cfg.canales,
+        )
+        resumenTono = r
+        publicar { it.copy(pruebasTono = it.pruebasTono + r) }
+        Log.i(TAG, "tono: $preset, ${c.tasa} Hz → ${cfg.sampleRate} Hz × ${cfg.canales}")
+    }
+
+    private fun reproducir(s: SesionEmisor, c: Comando.Reproducir) {
+        val lista = ColaMusica.canciones.value
+        if (c.indice !in lista.indices) return
+        if (modo == Modo.TONO) detenerAudio(s)
+        opcion = c.opcion
+        canciones = lista
+        control.cola(FabricaArchivos(contexto, lista, ejecutor))
+        control.preset(opcion.resolver(kBps()))
+        if (modo == Modo.MUSICA) {
+            medirSiguiente()
+        } else {
+            val ahora = SystemClock.elapsedRealtime()
+            val r = ResumenMusica(LocalDateTime.now().format(FORMATO_HORA), ahora, ahora, opcion)
+            resumenMusica = r
+            publicar { it.copy(musica = it.musica + r) }
+            empezarAudio(s, Modo.MUSICA)
+        }
+        control.reproducir(c.indice, 0)
+        Log.i(TAG, "música: canción ${c.indice + 1} de ${lista.size}, ${control.preset()}")
+    }
+
+    /** Agregar al final no corta nada; cualquier otro cambio (vaciar) detiene la música. */
+    private fun colaCambiada(s: SesionEmisor) {
+        val lista = ColaMusica.canciones.value
+        if (modo != Modo.MUSICA) return
+        if (lista.size >= canciones.size && lista.subList(0, canciones.size) == canciones) {
+            canciones = lista
+            control.cola(FabricaArchivos(contexto, lista, ejecutor))
+        } else {
+            detenerAudio(s)
+        }
+    }
+
+    private fun pausar() {
+        if (modo == null || control.pausado()) return
+        control.pausar()
+        pausaDesde = SystemClock.elapsedRealtime()
+    }
+
+    private fun reanudar() {
+        if (modo == null) return
+        control.reanudar()
+        pausaDesde = 0
+    }
+
+    private fun medirSiguiente() {
+        siguienteDesde = SystemClock.elapsedRealtime()
+        numeroAlPedir = control.flujo().numeroActual()
+    }
+
+    private fun empezarAudio(s: SesionEmisor, m: Modo) {
+        modo = m
+        s.setAudioActivo(true)
+        cortesPrevios = 0
+        cortesConexion = 0
+        cortesBase = s.estado()?.cortes ?: 0
+        esperandoSonarDesde = 0
+        pausaDesde = 0
+        siguienteDesde = 0
+    }
+
+    /** DETENER al receptor (se envía ya) y fin de lo que sonaba. */
+    private fun detenerAudio(s: SesionEmisor) {
+        control.detener()
+        control.paso(System.nanoTime())
+        finAudio(s, completa = false)
+    }
+
+    private fun alRecibirEstado(s: SesionEmisor) {
         val e = s.estado() ?: return
-        if (p == null) return
+        val m = modo ?: return
         cortesConexion = (e.cortes - cortesBase).coerceAtLeast(0)
-        val vivo = EnVivo(e.bufferMs, cortesPrevios + cortesConexion, e.reproduciendo, p.nivelEstimadoMs(), e.ultimoSeq)
+        val vivo = EnVivo(e.bufferMs, cortesPrevios + cortesConexion, e.reproduciendo, control.flujo().nivelEstimadoMs(), e.ultimoSeq)
         val ahora = SystemClock.elapsedRealtime()
         var recuperacion: Long? = null
         if (esperandoSonarDesde != 0L && e.reproduciendo) {
@@ -366,57 +508,126 @@ class Supervisor(
             esperandoSonarDesde = 0
             Log.i(TAG, "volvió a sonar ${recuperacion} ms después de encender el Bluetooth")
         }
-        val r = resumen?.let { r ->
-            r.copy(
-                hastaMs = ahora,
-                cortes = vivo.cortes,
-                bufferMinMs = if (e.reproduciendo) minOf(r.bufferMinMs, e.bufferMs) else r.bufferMinMs,
-                bufferMaxMs = if (e.reproduciendo) maxOf(r.bufferMaxMs, e.bufferMs) else r.bufferMaxMs,
-                bufferSumaMs = r.bufferSumaMs + if (e.reproduciendo) e.bufferMs else 0,
-                muestrasBuffer = r.muestrasBuffer + if (e.reproduciendo) 1 else 0,
-                recuperacionMs = recuperacion ?: r.recuperacionMs,
+        if (m == Modo.TONO) {
+            val r = resumenTono?.let { r ->
+                r.copy(
+                    hastaMs = ahora,
+                    cortes = vivo.cortes,
+                    bufferMinMs = if (e.reproduciendo) minOf(r.bufferMinMs, e.bufferMs) else r.bufferMinMs,
+                    bufferMaxMs = if (e.reproduciendo) maxOf(r.bufferMaxMs, e.bufferMs) else r.bufferMaxMs,
+                    bufferSumaMs = r.bufferSumaMs + if (e.reproduciendo) e.bufferMs else 0,
+                    muestrasBuffer = r.muestrasBuffer + if (e.reproduciendo) 1 else 0,
+                    recuperacionMs = recuperacion ?: r.recuperacionMs,
+                )
+            }
+            resumenTono = r
+            if (r != null) publicar { it.copy(pruebasTono = it.pruebasTono.dropLast(1) + r) }
+        } else {
+            val r = resumenMusica?.let { actualizarResumen(it, e, ahora, vivo.cortes) }
+            resumenMusica = r
+            if (r != null) publicar { it.copy(musica = it.musica.dropLast(1) + r) }
+        }
+        publicarReproduccion(vivo)
+    }
+
+    private fun actualizarResumen(r0: ResumenMusica, e: Estado, ahora: Long, cortes: Long): ResumenMusica {
+        var r = r0.copy(
+            hastaMs = ahora,
+            cortes = cortes,
+            errores = control.errores().toInt(),
+            // En pausa el buffer no baja: no cuenta.
+            bufferMinMs = if (e.reproduciendo) minOf(r0.bufferMinMs, e.bufferMs) else r0.bufferMinMs,
+            bufferMaxMs = if (e.reproduciendo) maxOf(r0.bufferMaxMs, e.bufferMs) else r0.bufferMaxMs,
+            bufferSumaMs = r0.bufferSumaMs + if (e.reproduciendo) e.bufferMs else 0,
+            muestrasBuffer = r0.muestrasBuffer + if (e.reproduciendo) 1 else 0,
+        )
+        if (pausaDesde != 0L && !e.reproduciendo) {
+            r = r.copy(pausasMs = r.pausasMs + (ahora - pausaDesde))
+            pausaDesde = 0
+        }
+        val f = control.flujo()
+        val inicio = f.seqInicioActual()
+        if (siguienteDesde != 0L && !control.abriendo() && f.numeroActual() != numeroAlPedir &&
+            inicio != Protocolo.SEQ_NINGUNO && e.reproduciendo && Seq.distancia(e.ultimoSeq, inicio) >= 0
+        ) {
+            r = r.copy(siguientesMs = r.siguientesMs + (ahora - siguienteDesde))
+            siguienteDesde = 0
+        }
+        if (pausaDesde != 0L && ahora - pausaDesde > LIMITE_MEDICION_MS) pausaDesde = 0
+        if (siguienteDesde != 0L && ahora - siguienteDesde > LIMITE_MEDICION_MS) siguienteDesde = 0
+        val i = control.indiceSonando()
+        val cancion = canciones.getOrNull(i)
+        val cfg = f.config()
+        if (e.reproduciendo && cancion != null && i !in r.pistas && cfg != null) {
+            val formato = "${tasaTexto(cfg.sampleRate)} kHz ${if (cfg.canales == 2) "estéreo" else "mono"}"
+            r = r.copy(
+                pistas = r.pistas + i,
+                tipos = (r.tipos + cancion.tipo).distinct(),
+                formatos = (r.formatos + formato).distinct(),
+                presets = (r.presets + control.preset().nombre).distinct(),
             )
         }
-        resumen = r
+        return r
+    }
+
+    /** Publica lo que suena; con [vivo] null conserva el último STATE publicado. */
+    private fun publicarReproduccion(vivo: EnVivo?) {
+        val m = modo ?: return
+        val i = control.indiceSonando()
+        val cfg = control.flujo().config()
+        val cancion = if (m == Modo.MUSICA) canciones.getOrNull(i) else null
         publicar { est ->
-            est.copy(
-                tono = est.tono?.copy(vivo = vivo),
-                pruebasTono = if (r == null) est.pruebasTono else est.pruebasTono.dropLast(1) + r,
+            val r = Reproduccion(
+                modo = m,
+                opcion = opcion,
+                preset = control.preset(),
+                tasaOrigen = tasaTono,
+                indice = i,
+                titulo = cancion?.titulo ?: if (m == Modo.TONO) FabricaTono.TRACK.titulo else "",
+                artista = cancion?.artista ?: if (m == Modo.TONO) FabricaTono.TRACK.artista else "",
+                posicionMs = control.posicionMs(),
+                duracionMs = cancion?.duracionMs ?: 0,
+                pausado = control.pausado(),
+                abriendo = control.abriendo(),
+                tasaSalida = cfg?.sampleRate ?: 0,
+                canales = cfg?.canales ?: 0,
+                vivo = vivo ?: est.reproduccion?.vivo,
+                error = control.ultimoError(),
             )
+            est.copy(reproduccion = r)
         }
     }
 
-    private fun finTono(s: SesionEmisor?) {
-        pipeline = null
+    /** Termina lo que sonaba: cierra los resúmenes y lo quita de la UI. */
+    private fun finAudio(s: SesionEmisor?, completa: Boolean) {
+        modo = null
         s?.setAudioActivo(false)
-        terminarTono()
-    }
-
-    /** Cierra el resumen del tono en curso (si hay) y lo quita de la UI. */
-    private fun terminarTono() {
-        val r = resumen?.copy(terminado = true, hastaMs = SystemClock.elapsedRealtime())
-        resumen = null
-        pipeline = null
+        val ahora = SystemClock.elapsedRealtime()
+        val rt = resumenTono?.copy(terminado = true, hastaMs = ahora)
+        val rm = resumenMusica?.copy(terminado = true, hastaMs = ahora, completa = completa, errores = control.errores().toInt())
+        resumenTono = null
+        resumenMusica = null
         publicar { est ->
             est.copy(
-                tono = null,
-                pruebasTono = if (r == null) est.pruebasTono else est.pruebasTono.dropLast(1) + r,
+                reproduccion = null,
+                pruebasTono = if (rt == null) est.pruebasTono else est.pruebasTono.dropLast(1) + rt,
+                musica = if (rm == null) est.musica else est.musica.dropLast(1) + rm,
             )
         }
     }
 
-    /** Fin pedido por el usuario: DETENER si hay tono, BYE(0) y cierre (el vigía corta a los 2 s). */
+    /** Fin pedido por el usuario: DETENER si hay audio, BYE(0) y cierre (el vigía corta a los 2 s). */
     private fun despedirse(s: SesionEmisor) {
         try {
-            pipeline?.let {
-                it.pedirDetener()
-                it.paso(System.nanoTime())
+            if (modo != null) {
+                control.detener()
+                control.paso(System.nanoTime())
             }
             s.despedir(Protocolo.BYE_NORMAL)
         } catch (_: IOException) {
             // Se cierra igual.
         }
-        finTono(s)
+        finAudio(s, completa = false)
     }
 
     private fun plazo(ms: Long) {
@@ -504,6 +715,8 @@ class Supervisor(
         private const val TIEMPO_PRUEBA_MS = 150_000L
         private const val TIEMPO_DESPEDIDA_NS = 2_000_000_000L
         private const val ESPERA_INACTIVO_MS = 250L
+        private const val ESPERA_ABRIENDO_MS = 10L
+        private const val LIMITE_MEDICION_MS = 10_000L
         private const val MAX_ESPERA_MS = 10_000L
         private const val MAX_RECONEXION_MS = 5 * 60_000L
         private const val ESPERA_TRAS_ENCENDER_MS = 1_000L
