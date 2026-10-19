@@ -422,3 +422,38 @@ Cambios:
   - la captura lee de a 20 ms en vez de 10.
   - La simulación de 30 min da la misma latencia (458–698 y 363–444 ms).
 - Tests JVM: 197 en verde; lint 0 avisos. El receptor no cambia (sigue la 0.4.0, protocolo v3).
+
+**Resultado en los teléfonos (2026-10-19):** el usuario instaló la 0.4.1: «funciona, el samsung queda en silencio».
+
+## Emisor para PC (Windows) — ParlanteY PC 0.5.0
+
+Pedido del usuario: «un exe en mi PC que se conecte al receptor para mandarle el audio de mi PC». Elegido: Bluetooth; Windows 10 u 11 de 64 bits.
+
+**Qué es:**
+- Módulo `pc/` (Java 21 + JNA): reutiliza las fuentes del `core` (protocolo v3, códec, `FlujoEmisor`/`ControlCola`/`ColaCaptura` en vivo, prueba de enlace).
+- Lo de Windows, con JNA:
+  - Bluetooth: vinculados con `BluetoothFindFirstDevice`, y socket RFCOMM `AF_BTH` por el UUID del servicio (SDP de Windows);
+  - captura: WASAPI loopback de la salida predeterminada, más un cliente de reproducción de silencio para que el loopback no se detenga cuando nada suena;
+  - silencio: `IAudioEndpointVolume::SetMute`, con restauración si el programa muere silenciado.
+- Se silencia recién cuando hay señal. Si en 2,5 s la captura queda muda, se quita el silencio y se avisa.
+- Se distribuye como `ParlanteY-PC-<versión>.zip`, armado con jpackage en `windows-latest`: `ParlanteY.exe` y `ParlanteY-diagnostico.exe`.
+
+**Verificación sin Windows (contenedor Linux):**
+- `:pc:test`, 13 tests:
+  - conversión de formatos (float, 16/24/32 bits, 5.1 → estéreo, mono);
+  - GUID del servicio en memoria;
+  - WAVEFORMATEXTENSIBLE;
+  - supervisor de punta a punta contra el receptor real del core (`SesionReceptor` + `Reproductor`) por tuberías en memoria y a tiempo real: primera conexión mide el enlace (Auto = Alta), envío en vivo sin cortes con objetivo 500 ms y CONFIG en vivo, reconexión tras un corte, silencio que calla la captura → se quita y avisa, otra versión del protocolo, detener manda BYE, sin receptor da un error claro.
+- `--diagnostico` en Linux termina sin colgarse aunque no haya bibliotecas de Windows.
+- En el runner Windows de GitHub, el diagnóstico comprueba que JNA carga y que las estructuras de Bluetooth miden lo que exige x64 (560/40/4 bytes).
+
+### Pruebas en el PC
+
+| Prueba | Resultado |
+|---|---|
+| ① `ParlanteY-diagnostico.exe`: ¿ve el adaptador Bluetooth, el Galaxy Y vinculado y la salida de audio? | [PENDIENTE] |
+| ② Conectar al Galaxy Y (receptor 0.4.0 abierto) | [PENDIENTE] |
+| ③ Enviar el audio del PC (YouTube, Spotify): suena, latencia | [PENDIENTE] |
+| ④ «Silenciar el PC»: ¿el PC queda en silencio y el Galaxy Y sigue sonando? | [PENDIENTE] |
+| ⑤ 30 min seguidos: cortes, latencia («Copiar para NOTAS») | [PENDIENTE] |
+| ⑥ Apagar y encender el Bluetooth del PC: reconecta solo | [PENDIENTE] |

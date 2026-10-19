@@ -31,9 +31,11 @@ parlantey/
 ├── NOTAS.md
 ├── core/       Android library, Java, minSdk 9: protocolo, códec, DSP, tests JVM
 ├── receptor/   app para el Galaxy Y, Java, minSdk 9
-└── emisor/     app moderna, Kotlin + Compose, minSdk 26
+├── emisor/     app moderna, Kotlin + Compose, minSdk 26
+└── pc/         emisor para Windows 10/11 x64: Java 21 + JNA, compila las fuentes de core
 ```
-Un solo build Gradle multi-módulo. Paquetes: `cl.parlantey.core`, `cl.parlantey.receptor`, `cl.parlantey.emisor`.
+Un solo build Gradle multi-módulo. Paquetes: `cl.parlantey.core`, `cl.parlantey.receptor`, `cl.parlantey.emisor`, `cl.parlantey.pc`.
+- `pc` (agregado a pedido del usuario): manda al Galaxy Y lo que suena en el PC (WASAPI loopback) por Bluetooth (Winsock `AF_BTH`), con el mismo protocolo y el mismo `FlujoEmisor`/`ControlCola` en vivo. Se empaqueta como `ParlanteY.exe` (jpackage, con su propio Java) en el job de Windows del workflow de release.
 
 ## Reglas duras
 
