@@ -4,6 +4,7 @@ import cl.parlantey.core.ColaCaptura;
 import com.sun.jna.Function;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
+import com.sun.jna.WString;
 import com.sun.jna.platform.win32.Guid;
 import com.sun.jna.platform.win32.Ole32;
 import com.sun.jna.platform.win32.WinNT;
@@ -48,7 +49,9 @@ final class CapturaWindows implements FuenteSistema {
     // Índices en las tablas de métodos (después de los 3 de IUnknown).
     private static final int RELEASE = 2;
     private static final int ENUM_GET_DEFAULT_AUDIO_ENDPOINT = 4;
+    private static final int ENUM_GET_DEVICE = 5;
     private static final int DEVICE_ACTIVATE = 3;
+    private static final int DEVICE_GET_ID = 5;
     private static final int CLIENT_INITIALIZE = 3;
     private static final int CLIENT_GET_BUFFER_SIZE = 4;
     private static final int CLIENT_GET_CURRENT_PADDING = 6;
@@ -68,6 +71,8 @@ final class CapturaWindows implements FuenteSistema {
 
     private volatile boolean activa;
     private volatile Thread hilo;
+    /** Un hilo de captura que no terminó a tiempo: no se abre otro mientras viva (comparten campos). */
+    private volatile Thread anterior;
     private volatile ColaCaptura cola;
     private volatile String descripcion;
     private volatile String error;
@@ -81,6 +86,10 @@ final class CapturaWindows implements FuenteSistema {
     @Override
     public synchronized ColaCaptura iniciar() throws IOException {
         detener();
+        Thread viejo = anterior;
+        if (viejo != null && viejo.isAlive()) {
+            throw new IOException("la captura anterior todavía se está cerrando; intenta de nuevo en unos segundos");
+        }
         error = null;
         CountDownLatch listo = new CountDownLatch(1);
         activa = true;
@@ -90,7 +99,8 @@ final class CapturaWindows implements FuenteSistema {
         hilo = t;
         t.start();
         try {
-            if (!listo.await(5, TimeUnit.SECONDS)) {
+            // Corto: mientras tanto el hilo de enlace no manda PING (el receptor corta a los 5 s).
+            if (!listo.await(3, TimeUnit.SECONDS)) {
                 detener();
                 throw new IOException("Windows no respondió al abrir la captura de audio");
             }
@@ -117,6 +127,9 @@ final class CapturaWindows implements FuenteSistema {
                 t.join(2000); // restaura el silencio y libera COM en su hilo
             } catch (InterruptedException ignorada) {
                 Thread.currentThread().interrupt();
+            }
+            if (t.isAlive()) {
+                anterior = t;
             }
         }
         ColaCaptura c = cola;
@@ -159,6 +172,7 @@ final class CapturaWindows implements FuenteSistema {
     private int framesSilencio;
     private Pointer volumen;
     private Pointer formato;
+    private String idDispositivo;
     private Conversor conversor;
     private byte[] crudo = new byte[0];
     private short[] pcm = new short[0];
@@ -177,7 +191,12 @@ final class CapturaWindows implements FuenteSistema {
                 listo.countDown();
             }
             restaurarSilencioPendiente();
+            int vueltas = 0;
             while (activa) {
+                if (++vueltas % 100 == 0 && cambioLaSalida()) { // ~1 s
+                    error = "cambió la salida de audio de Windows; vuelve a enviar para capturar la nueva";
+                    break;
+                }
                 aplicarSilencio();
                 try {
                     alimentarSilencio();
@@ -217,11 +236,12 @@ final class CapturaWindows implements FuenteSistema {
             throw new IOException("Windows no tiene una salida de audio activa (0x" + Integer.toHexString(hr) + ")");
         }
         dispositivo = p.getValue();
+        idDispositivo = idDe(dispositivo);
         cliente = activar(IID_IAudioClient, "IAudioClient");
         verificar(llamar(cliente, CLIENT_GET_MIX_FORMAT, p), "no se pudo leer el formato de la salida");
         formato = p.getValue();
         Formato f = Formato.leer(formato);
-        conversor = new Conversor(f.canales, f.bits, f.flotante);
+        conversor = new Conversor(f.canales, f.bits, f.flotante, f.mascara);
         verificar(llamar(cliente, CLIENT_INITIALIZE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, BUFFER_100NS,
                 0L, formato, null), "Windows no permitió capturar la salida (loopback)");
         IntByReference frames = new IntByReference();
@@ -236,9 +256,10 @@ final class CapturaWindows implements FuenteSistema {
         } catch (IOException e) {
             volumen = null; // sin silenciar, pero captura igual
         }
-        cola = new ColaCaptura(f.tasa, conversor.canalesSalida(), Captura.MAX_PENDIENTE_MS);
-        descripcion = f.texto();
+        ColaCaptura nueva = new ColaCaptura(f.tasa, conversor.canalesSalida(), Captura.MAX_PENDIENTE_MS);
         verificar(llamar(cliente, CLIENT_START), "no se pudo empezar la captura");
+        descripcion = f.texto();
+        cola = nueva; // recién ahora: iniciar() no devuelve una cola de una captura que no arrancó
     }
 
     /** Un cliente de reproducción que solo escribe silencio: con él, el loopback entrega paquetes siempre. */
@@ -315,7 +336,7 @@ final class CapturaWindows implements FuenteSistema {
     // --- Silencio de la salida.
 
     private void aplicarSilencio() {
-        boolean pedido = silencioPedido && volumen != null;
+        boolean pedido = silencioPedido && volumen != null && idDispositivo != null; // sin ID no se podría restaurar
         if (pedido == silenciadoPorNosotros) {
             return;
         }
@@ -333,46 +354,111 @@ final class CapturaWindows implements FuenteSistema {
             return;
         }
         if (si) {
-            ajustes.silencioPendiente(true); // antes: si el programa muere, se restaura la próxima vez
+            ajustes.silencioPendiente(idDispositivo); // antes: si el programa muere, se restaura la próxima vez
         }
-        if (llamar(volumen, VOLUME_SET_MUTE, si ? 1 : 0, null) >= 0) {
-            silenciadoPorNosotros = si;
-        }
-        if (!si) {
-            ajustes.silencioPendiente(false);
+        int hr = llamar(volumen, VOLUME_SET_MUTE, si ? 1 : 0, null);
+        if (si) {
+            silenciadoPorNosotros = hr >= 0;
+            if (hr < 0) {
+                ajustes.silencioPendiente(null);
+            }
+        } else {
+            silenciadoPorNosotros = false;
+            if (hr >= 0) {
+                ajustes.silencioPendiente(null); // si falló (p. ej. se desconectó), queda pendiente para esa salida
+            }
         }
     }
 
+    /** Quita el silencio pendiente de una ejecución anterior, en la salida que se silenció. */
     private void restaurarSilencioPendiente() {
-        if (ajustes.silencioPendiente() && volumen != null) {
-            llamar(volumen, VOLUME_SET_MUTE, 0, null);
-            ajustes.silencioPendiente(false);
+        String id = ajustes.silencioPendiente();
+        if (id != null && enumerador != null && quitarSilencio(enumerador, id)) {
+            ajustes.silencioPendiente(null);
         }
     }
 
-    /** Quita el silencio que haya dejado una ejecución anterior que terminó a la fuerza. */
+    /** SetMute(false) en la salida {@code id}; true si Windows lo confirmó. */
+    private static boolean quitarSilencio(Pointer enumerador, String id) {
+        PointerByReference p = new PointerByReference();
+        if (llamar(enumerador, ENUM_GET_DEVICE, new WString(id), p) < 0) {
+            return false; // esa salida no está (desconectada): se intenta la próxima vez
+        }
+        Pointer dispositivo = p.getValue();
+        try {
+            if (llamar(dispositivo, DEVICE_ACTIVATE, IID_IAudioEndpointVolume, CLSCTX_ALL, null, p) < 0) {
+                return false;
+            }
+            Pointer volumen = p.getValue();
+            try {
+                return llamar(volumen, VOLUME_SET_MUTE, 0, null) >= 0;
+            } finally {
+                soltar(volumen);
+            }
+        } finally {
+            soltar(dispositivo);
+        }
+    }
+
+    /** ID de un IMMDevice (o null). */
+    private static String idDe(Pointer dispositivo) {
+        PointerByReference p = new PointerByReference();
+        if (llamar(dispositivo, DEVICE_GET_ID, p) < 0 || p.getValue() == null) {
+            return null;
+        }
+        String id = p.getValue().getWideString(0);
+        Ole32.INSTANCE.CoTaskMemFree(p.getValue());
+        return id;
+    }
+
+    /** true si la salida predeterminada de Windows ya no es la que se captura. */
+    private boolean cambioLaSalida() {
+        if (idDispositivo == null) {
+            return false;
+        }
+        PointerByReference p = new PointerByReference();
+        if (llamar(enumerador, ENUM_GET_DEFAULT_AUDIO_ENDPOINT, E_RENDER, E_CONSOLE, p) < 0) {
+            return false;
+        }
+        Pointer d = p.getValue();
+        try {
+            String id = idDe(d);
+            return id != null && !id.equals(idDispositivo);
+        } finally {
+            soltar(d);
+        }
+    }
+
+    /**
+     * Quita el silencio que haya dejado una ejecución anterior (o esta, si se cierra sin haber podido
+     * restaurarlo). Bloquea hasta 3 s. Se puede llamar desde cualquier hilo.
+     */
     static void restaurarAlIniciar(Ajustes ajustes) {
-        if (!ajustes.silencioPendiente()) {
+        String id = ajustes.silencioPendiente();
+        if (id == null) {
             return;
         }
         Thread t = new Thread(() -> {
-            CapturaWindows c = new CapturaWindows(ajustes);
+            boolean com = false;
+            Pointer enumerador = null;
             try {
                 Ole32.INSTANCE.CoInitializeEx(null, COINIT_MULTITHREADED);
+                com = true;
                 PointerByReference p = new PointerByReference();
                 if (Ole32.INSTANCE.CoCreateInstance(CLSID_MMDeviceEnumerator, null, CLSCTX_ALL, IID_IMMDeviceEnumerator, p)
                         .intValue() >= 0) {
-                    c.enumerador = p.getValue();
-                    if (llamar(c.enumerador, ENUM_GET_DEFAULT_AUDIO_ENDPOINT, E_RENDER, E_CONSOLE, p) >= 0) {
-                        c.dispositivo = p.getValue();
-                        c.volumen = c.activar(IID_IAudioEndpointVolume, "IAudioEndpointVolume");
-                        c.restaurarSilencioPendiente();
+                    enumerador = p.getValue();
+                    if (quitarSilencio(enumerador, id)) {
+                        ajustes.silencioPendiente(null);
                     }
                 }
-                c.cerrarTodo();
-                Ole32.INSTANCE.CoUninitialize();
             } catch (Throwable ignorada) {
                 // se intenta de nuevo la próxima vez
+            } finally {
+                soltar(enumerador);
+                if (com) {
+                    Ole32.INSTANCE.CoUninitialize();
+                }
             }
         }, "ParlanteY-restaurar");
         t.start();
@@ -451,12 +537,15 @@ final class CapturaWindows implements FuenteSistema {
         final int canales;
         final int bits;
         final boolean flotante;
+        /** dwChannelMask (0 si el formato no es extensible). */
+        final int mascara;
 
-        Formato(int tasa, int canales, int bits, boolean flotante) {
+        Formato(int tasa, int canales, int bits, boolean flotante, int mascara) {
             this.tasa = tasa;
             this.canales = canales;
             this.bits = bits;
             this.flotante = flotante;
+            this.mascara = mascara;
         }
 
         static Formato leer(Pointer p) throws IOException {
@@ -465,14 +554,16 @@ final class CapturaWindows implements FuenteSistema {
             int tasa = p.getInt(4);
             int bits = p.getShort(14) & 0xFFFF;
             boolean flotante = etiqueta == WAVE_FORMAT_IEEE_FLOAT;
+            int mascara = 0;
             if (etiqueta == WAVE_FORMAT_EXTENSIBLE) {
+                mascara = p.getInt(20);
                 int sub = p.getInt(24); // Data1 del SubFormat: 1 PCM, 3 IEEE float
                 flotante = sub == WAVE_FORMAT_IEEE_FLOAT;
             }
             if (tasa < 8000 || tasa > 192000) {
                 throw new IOException("tasa de la salida no soportada: " + tasa + " Hz");
             }
-            return new Formato(tasa, canales, bits, flotante);
+            return new Formato(tasa, canales, bits, flotante, mascara);
         }
 
         String texto() {

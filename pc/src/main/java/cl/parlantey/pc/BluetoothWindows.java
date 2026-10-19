@@ -45,6 +45,7 @@ final class BluetoothWindows implements Transporte.Conector {
         boolean BluetoothFindDeviceClose(Pointer h);
     }
 
+    /** Los códigos de error se leen con Native.getLastError(): JNA los guarda justo después de cada llamada. */
     public interface Ws2 extends Library {
         int WSAStartup(short version, Pointer datos);
 
@@ -60,7 +61,6 @@ final class BluetoothWindows implements Transporte.Conector {
 
         int closesocket(long s);
 
-        int WSAGetLastError();
     }
 
     @Structure.FieldOrder({"dwSize"})
@@ -187,7 +187,7 @@ final class BluetoothWindows implements Transporte.Conector {
         Ws2 w = ws2();
         long s = w.socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM);
         if (s == INVALID_SOCKET) {
-            throw new IOException("no se pudo crear el socket Bluetooth (" + w.WSAGetLastError() + ")");
+            throw new IOException("no se pudo crear el socket Bluetooth (" + Native.getLastError() + ")");
         }
         Socket sock = new Socket(w, s);
         conectando = sock;
@@ -199,7 +199,7 @@ final class BluetoothWindows implements Transporte.Conector {
             escribirGuid(dir, 10, Protocolo.UUID_SERVICIO);
             dir.setInt(26, 0); // canal 0: Windows lo busca por SDP con el UUID
             if (w.connect(s, dir, LARGO_SOCKADDR_BTH) == SOCKET_ERROR) {
-                int err = w.WSAGetLastError();
+                int err = Native.getLastError();
                 sock.cerrar();
                 throw new IOException(textoError(err));
             }
@@ -285,7 +285,7 @@ final class BluetoothWindows implements Transporte.Conector {
                         return -1;
                     }
                     if (n < 0) {
-                        throw new IOException(cerrado.get() ? "conexión cerrada" : textoError(w.WSAGetLastError()));
+                        throw new IOException(cerrado.get() ? "conexión cerrada" : textoError(Native.getLastError()));
                     }
                     bufEntrada.read(0, b, off, n);
                     return n;
@@ -312,7 +312,7 @@ final class BluetoothWindows implements Transporte.Conector {
                         while (enviado < trozo) {
                             int n = w.send(s, bufSalida.share(enviado), trozo - enviado, 0);
                             if (n < 0) {
-                                throw new IOException(cerrado.get() ? "conexión cerrada" : textoError(w.WSAGetLastError()));
+                                throw new IOException(cerrado.get() ? "conexión cerrada" : textoError(Native.getLastError()));
                             }
                             enviado += n;
                         }

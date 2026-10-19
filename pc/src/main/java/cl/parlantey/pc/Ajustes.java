@@ -47,13 +47,17 @@ public final class Ajustes {
         p.putBoolean("silenciar", si);
     }
 
-    /** true si dejamos la salida de Windows silenciada (p. ej. el programa se cerró a la fuerza). */
-    public boolean silencioPendiente() {
-        return p.getBoolean("silencioPendiente", false);
+    /**
+     * ID de la salida de Windows que dejamos silenciada (p. ej. el programa se cerró a la fuerza), o
+     * null si ninguna. Se restaura esa misma salida, aunque ya no sea la predeterminada.
+     */
+    public String silencioPendiente() {
+        String id = p.get("silencioPendiente", "");
+        return id.isEmpty() ? null : id;
     }
 
-    public void silencioPendiente(boolean si) {
-        p.putBoolean("silencioPendiente", si);
+    public void silencioPendiente(String idSalida) {
+        p.put("silencioPendiente", idSalida == null ? "" : idSalida);
         try {
             p.flush();
         } catch (Exception ignorada) {

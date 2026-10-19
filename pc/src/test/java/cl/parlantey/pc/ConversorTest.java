@@ -48,25 +48,39 @@ public class ConversorTest {
         assertEquals(-32768, s[1]);
     }
 
-    /** 5.1 (6 canales): se toman frontal izquierdo y derecho. Mono queda mono. */
+    /** 5.1 (FL FR FC LFE BL BR): el centro a los dos lados (−3 dB), traseros −6 dB, sin LFE. */
     @Test
-    public void multicanalYMono() {
-        ByteBuffer b = le(4 * 6 * 2);
-        for (int f = 0; f < 2; f++) {
-            for (int c = 0; c < 6; c++) {
-                b.putFloat((c + 1) / 10f);
-            }
-        }
-        short[] s = new short[4];
-        Conversor c = new Conversor(6, 32, true);
-        c.convertir(b.array(), 2, s);
+    public void cincoPuntoUnoMezclaElCentro() {
+        // Solo centro y LFE: la voz debe llegar a los dos lados; el LFE no.
+        ByteBuffer b = le(4 * 6);
+        b.putFloat(0f).putFloat(0f).putFloat(0.5f).putFloat(0.9f).putFloat(0f).putFloat(0f);
+        short[] s = new short[2];
+        Conversor c = new Conversor(6, 32, true, 0x3F); // KSAUDIO_SPEAKER_5POINT1
+        c.convertir(b.array(), 1, s);
         assertEquals(2, c.canalesSalida());
         assertEquals(24, c.bytesPorFrame());
-        assertEquals(Math.round(0.1f * 32767), s[0]);
-        assertEquals(Math.round(0.2f * 32767), s[1]);
-        assertEquals(Math.round(0.1f * 32767), s[2]);
+        int esperado = Math.round(0.5f * 32767 * 0.7071f);
+        assertEquals(esperado, s[0], 1);
+        assertEquals(esperado, s[1], 1);
+        // Frontales y traseros a su lado; satura en vez de dar la vuelta.
+        ByteBuffer b2 = le(4 * 6);
+        b2.putFloat(0.4f).putFloat(-1f).putFloat(0f).putFloat(0f).putFloat(0.4f).putFloat(-1f);
+        c.convertir(b2.array(), 1, s);
+        assertEquals(Math.round(0.6f * 32767), s[0], 1);
+        assertEquals(-32768, s[1]);
         Conversor mono = new Conversor(1, 16, false);
         assertEquals(1, mono.canalesSalida());
+    }
+
+    /** 7.1 con la máscara en 0: se usa el orden habitual. */
+    @Test
+    public void sieteUnoSinMascara() {
+        ByteBuffer b = le(4 * 8);
+        b.putFloat(0f).putFloat(0f).putFloat(0f).putFloat(0f).putFloat(0f).putFloat(0f).putFloat(0.2f).putFloat(0f);
+        short[] s = new short[2];
+        new Conversor(8, 32, true).convertir(b.array(), 1, s);
+        assertEquals("lateral izquierdo a la izquierda", Math.round(0.1f * 32767), s[0], 1);
+        assertEquals(0, s[1]);
     }
 
     @Test

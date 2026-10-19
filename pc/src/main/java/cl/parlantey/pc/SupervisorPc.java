@@ -242,6 +242,7 @@ public final class SupervisorPc {
                     falla = e;
                 } finally {
                     plazo(0);
+                    fuente.silenciar(false); // sin conexión el PC vuelve a sonar; se silencia de nuevo al reconectar
                     SesionEmisor s = sesion;
                     sesion = null;
                     transporte = null;
@@ -570,6 +571,9 @@ public final class SupervisorPc {
                 control.paso(System.nanoTime());
             }
             s.despedir(Protocolo.BYE_NORMAL);
+            Thread.sleep(150); // en RFCOMM de Windows, cerrar enseguida a veces pierde los últimos bytes (el BYE)
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         } catch (IOException ignorada) {
             // se cierra igual
         }

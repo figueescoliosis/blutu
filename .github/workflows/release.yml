@@ -86,11 +86,12 @@ jobs:
         run: |
           $version = $env:TAG.TrimStart("v")
           $jar = (Get-ChildItem lib -Filter "pc-*.jar").Name
-          "win-console=true`narguments=--diagnostico" | Set-Content -Encoding ascii diagnostico.properties
+          if ($version -notmatch '^\d+(\.\d+){0,3}$') { throw "el tag debe ser numérico (p. ej. v0.5.0): $env:TAG" }
+          "win-console=true`narguments=--diagnostico --pausa" | Set-Content -Encoding ascii diagnostico.properties
           jpackage --type app-image --name ParlanteY --input lib --main-jar $jar `
             --main-class cl.parlantey.pc.Principal --app-version $version --vendor ParlanteY `
             --java-options "-Dfile.encoding=UTF-8" --add-launcher ParlanteY-diagnostico=diagnostico.properties --dest out
-          $diag = & out/ParlanteY/ParlanteY-diagnostico.exe | Out-String
+          $diag = & out/ParlanteY/ParlanteY-diagnostico.exe --diagnostico | Out-String
           Write-Output $diag
           if ($diag -notmatch "terminado") { throw "el .exe de diagnóstico no corrió" }
           New-Item -ItemType Directory -Force salida | Out-Null
