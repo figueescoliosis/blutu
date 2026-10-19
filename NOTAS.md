@@ -447,6 +447,18 @@ Pedido del usuario: «un exe en mi PC que se conecte al receptor para mandarle e
 - `--diagnostico` en Linux termina sin colgarse aunque no haya bibliotecas de Windows.
 - En el runner Windows de GitHub, el diagnóstico comprueba que JNA carga y que las estructuras de Bluetooth miden lo que exige x64 (560/40/4 bytes).
 
+**En Windows real** (runner `windows-latest` de GitHub, Windows Server 2025, release v0.5.0):
+- `--diagnostico` con `java` y con `ParlanteY-diagnostico.exe` empaquetado:
+  - JNA 5.14.0 carga;
+  - estructuras de Bluetooth: `InfoDispositivo 560, ParamsBusqueda 40, ParamsRadio 4` (lo que exige x64);
+  - Bluetooth: «Sin adaptador Bluetooth encendido»: `BluetoothFindFirstRadio` responde; el runner no tiene adaptador;
+  - audio: COM y `IMMDeviceEnumerator::GetDefaultAudioEndpoint` responden `0x80070490` (no hay salida de audio en el runner).
+- Las llamadas a Windows funcionan; falta probarlas con hardware.
+- Revisión adversarial de las llamadas a Windows:
+  - **verificados:** layouts de estructuras, `SOCKADDR_BTH` empaquetado (30 bytes), índices de las tablas COM y GUIDs;
+  - **corregido:** silencio que quedaba puesto sin conexión o al salir, restauración en la salida correcta, cambio de salida predeterminada, mezcla 5.1/7.1 con el centro, `Native.getLastError()` y consola del diagnóstico.
+- Según el driver, silenciar la salida puede o no callar el loopback: con mute por hardware (Realtek típico) la captura sigue; con mute por software (muchos USB, HDMI, audífonos Bluetooth) llegan ceros. El programa lo detecta y quita el silencio.
+
 ### Pruebas en el PC
 
 | Prueba | Resultado |
