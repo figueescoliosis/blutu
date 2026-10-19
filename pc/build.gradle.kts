@@ -3,6 +3,8 @@ plugins {
     application
 }
 
+version = "0.5.0"
+
 // Emisor para Windows (PC): Java 21 + JNA. Compila las fuentes del core directamente (el core es una
 // biblioteca de Android, pero su código es Java puro): una sola implementación del protocolo.
 java {
@@ -28,4 +30,10 @@ application {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+}
+
+tasks.jar {
+    manifest {
+        attributes("Implementation-Version" to project.version)
+    }
 }

@@ -1,6 +1,6 @@
 name: Release de APK
 
-# Compila y verifica los dos APK y los publica como release de GitHub.
+# Compila y verifica los dos APK y el programa para PC (Windows), y los publica como release de GitHub.
 # Se lanza a mano: pestaña Actions → "Release de APK" → Run workflow.
 on:
   workflow_dispatch:
@@ -30,37 +30,114 @@ jobs:
           set +o pipefail
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
-      - name: Tests, lint, compilación y verificación del receptor
+      - name: Tests, lint, compilación y verificación del receptor; programa para PC
         run: >-
           ./gradlew --no-daemon
           :core:testDebugUnitTest :core:lintDebug :receptor:lintDebug :emisor:lintDebug
           :receptor:assembleDebug :emisor:assembleDebug :receptor:verificarApk
+          :pc:test :pc:installDist
 
-      - name: Publicar la release
+      - name: Juntar los APK
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
           version="${TAG#v}"
           mkdir -p salida
           cp receptor/build/outputs/apk/debug/receptor-debug.apk "salida/ParlanteY-receptor-$version.apk"
           cp emisor/build/outputs/apk/debug/emisor-debug.apk "salida/ParlanteY-emisor-$version.apk"
-          (cd salida && sha256sum *.apk > SHA256SUMS.txt)
-          cat > notas.md <<NOTAS
-          APK de depuración de ParlanteY ($TAG), compilados desde el commit ${GITHUB_SHA::7}.
 
-          | Archivo | Teléfono |
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: salida/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-lib
+          path: pc/build/install/ParlanteY/lib/
+
+  pc-windows:
+    # El .exe se arma en Windows (jpackage solo empaqueta para el sistema donde corre).
+    needs: apk
+    runs-on: windows-latest
+    steps:
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pc-lib
+          path: lib
+
+      - name: Diagnóstico en Windows (JNA carga las bibliotecas; tamaños de las estructuras de x64)
+        shell: pwsh
+        run: |
+          $salida = java -cp "lib/*" cl.parlantey.pc.Principal --diagnostico | Out-String
+          Write-Output $salida
+          if ($salida -notmatch "InfoDispositivo 560, ParamsBusqueda 40, ParamsRadio 4") { throw "estructuras de Bluetooth con otro tamaño" }
+          if ($salida -notmatch "terminado") { throw "el diagnóstico no terminó" }
+
+      - name: Empaquetar ParlanteY.exe (con su propio Java)
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          $version = $env:TAG.TrimStart("v")
+          $jar = (Get-ChildItem lib -Filter "pc-*.jar").Name
+          "win-console=true`narguments=--diagnostico" | Set-Content -Encoding ascii diagnostico.properties
+          jpackage --type app-image --name ParlanteY --input lib --main-jar $jar `
+            --main-class cl.parlantey.pc.Principal --app-version $version --vendor ParlanteY `
+            --java-options "-Dfile.encoding=UTF-8" --add-launcher ParlanteY-diagnostico=diagnostico.properties --dest out
+          $diag = & out/ParlanteY/ParlanteY-diagnostico.exe | Out-String
+          Write-Output $diag
+          if ($diag -notmatch "terminado") { throw "el .exe de diagnóstico no corrió" }
+          New-Item -ItemType Directory -Force salida | Out-Null
+          Compress-Archive -Path out/ParlanteY -DestinationPath "salida/ParlanteY-PC-$version.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-zip
+          path: salida/
+
+  publicar:
+    needs: [apk, pc-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: descargas
+
+      - name: Publicar la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          version="${TAG#v}"
+          mkdir -p salida
+          cp descargas/apk/*.apk descargas/pc-zip/*.zip salida/
+          (cd salida && sha256sum *.apk *.zip > SHA256SUMS.txt)
+          cat > notas.md <<NOTAS
+          ParlanteY ($TAG), compilado desde el commit ${GITHUB_SHA::7}.
+
+          | Archivo | Dónde |
           |---|---|
           | \`ParlanteY-receptor-$version.apk\` | Samsung Galaxy Y (Android 2.3, minSdk 9, firma v1) |
           | \`ParlanteY-emisor-$version.apk\` | teléfono moderno (Android 8 o superior) |
+          | \`ParlanteY-PC-$version.zip\` | PC con Windows 10/11 de 64 bits y Bluetooth |
 
           **Emisor:** abre este enlace en el navegador del teléfono moderno, descarga el APK, tócalo y permite "instalar apps desconocidas".
 
           **Galaxy Y:** su navegador (Android 2.3) no puede abrir GitHub, porque no soporta TLS 1.2. Descarga el APK en el PC o en el otro teléfono y pásalo por USB a la microSD, o instálalo con \`adb install -r\`. Antes activa Ajustes → Aplicaciones → Orígenes desconocidos.
 
-          Firmados con la clave de depuración compartida del repo (\`firma/\`). Las sumas SHA-256 están en \`SHA256SUMS.txt\`.
+          **PC:** descomprime el zip, entra a la carpeta \`ParlanteY\` y abre \`ParlanteY.exe\` (trae su propio Java: no hay que instalar nada). Windows SmartScreen dirá que es una aplicación no reconocida: Más información → Ejecutar de todas formas. Si algo no funciona, abre \`ParlanteY-diagnostico.exe\` y copia lo que muestra.
+
+          APK firmados con la clave de depuración compartida del repo (\`firma/\`). Las sumas SHA-256 están en \`SHA256SUMS.txt\`.
           NOTAS
           gh release create "$TAG" salida/* \
+            --repo "$REPO" \
             --target "$GITHUB_SHA" \
             --title "ParlanteY $TAG" \
             --notes-file notas.md \
