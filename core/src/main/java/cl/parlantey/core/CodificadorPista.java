@@ -125,6 +125,11 @@ public final class CodificadorPista {
         return validos;
     }
 
+    /** ms de audio de salida que faltan para completar el bloque en armado. */
+    public long msParaCompletar() {
+        return (long) (mpb - llenos) * 1000L / tasaSalida;
+    }
+
     /** Descarta lo armado y reinicia filtros y códec (VACIAR sobre la misma fuente). */
     public void reiniciar() {
         llenos = 0;

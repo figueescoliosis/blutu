@@ -396,7 +396,7 @@ Versiones: receptor 0.4.0 y emisor 0.4.0 (protocolo v3), release v0.4.0.
 | Prueba | Resultado |
 |---|---|
 | ① 30 min de captura (YouTube o Spotify) con latencia estable; cortes | [PENDIENTE] |
-| ② Bajar el volumen del emisor: ¿la captura baja? (depende del fabricante) | [PENDIENTE] |
+| ② Bajar el volumen del emisor: ¿la captura baja? (depende del fabricante) | ✓ **No baja** (2026-10-19, Samsung SM-A356E, Android 16): con el volumen del Samsung al mínimo no suena nada en él y el Galaxy Y sigue sonando; su volumen se regula con sus teclas. Desde la 0.4.1 el emisor se silencia solo al capturar (interruptor, activado por defecto). |
 | ③ Qué apps llegan en silencio | [PENDIENTE] |
 | ④ Con la pantalla del emisor bloqueada: ¿sigue la captura? | [PENDIENTE] |
 | ⑤ En el diálogo de Android aparece «Pantalla completa» (no «una app») | [PENDIENTE] |
@@ -406,3 +406,19 @@ Versiones: receptor 0.4.0 y emisor 0.4.0 (protocolo v3), release v0.4.0.
 Tabla de «Copiar para NOTAS (Fase 4)»: [PENDIENTE]
 
 Las pruebas de la Fase 3 en los teléfonos (arriba) siguen pendientes: se hacen con esta misma versión.
+
+### Emisor 0.4.1 — «como audífonos» (2026-10-19)
+
+Pedido del usuario tras probar la 0.4.0:
+- el Samsung seguía sonando por su parlante;
+- la captura parecía «transmitir la pantalla» y quitarle rendimiento.
+
+**Sin root, una app no puede presentarse como audífonos.** El Galaxy Y no puede ser parlante Bluetooth (A2DP sink), y la captura de audio solo existe vía MediaProjection: no se graba video, pero Android exige ese permiso y muestra su aviso.
+
+Cambios:
+- **Silenciar este teléfono mientras envía** (activado por defecto): al empezar la captura se guarda el volumen de música y se pone en 0; al terminar se restaura (si el usuario no lo cambió). El volumen guardado sobrevive a que Android cierre la app.
+- **Menos trabajo en vivo:**
+  - el hilo de envío espera lo que falta para completar un bloque (≈ 1 despertar por bloque de 21 ms en vez de cada 5 ms);
+  - la captura lee de a 20 ms en vez de 10.
+  - La simulación de 30 min da la misma latencia (458–698 y 363–444 ms).
+- Tests JVM: 197 en verde; lint 0 avisos. El receptor no cambia (sigue la 0.4.0, protocolo v3).

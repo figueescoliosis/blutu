@@ -46,6 +46,12 @@ public final class FlujoEmisor {
     static final long ESPERA_LLENO_MS = 50;
     static final long ESPERA_SIN_DATOS_MS = 5;
     /**
+     * En vivo, sin un bloque completo todavía: esperar lo que falta para completarlo (la captura
+     * llega a tiempo real), entre estos topes. Así el hilo despierta ~1 vez por bloque y no 200 por segundo.
+     */
+    static final long ESPERA_EN_VIVO_MIN_MS = 2;
+    static final long ESPERA_EN_VIVO_MAX_MS = 25;
+    /**
      * Tras un FIN, se da por vacío al receptor aunque el STATE no lo confirme: nivel + este margen
      * (sin contar el tiempo en pausa).
      */
@@ -299,6 +305,10 @@ public final class FlujoEmisor {
         }
         int n = actual.siguiente(bloque);
         if (n == 0) {
+            if (configActual.enVivo) {
+                long falta = actual.msParaCompletar();
+                return Math.max(ESPERA_EN_VIVO_MIN_MS, Math.min(ESPERA_EN_VIVO_MAX_MS, falta));
+            }
             return ESPERA_SIN_DATOS_MS;
         }
         if (n == CodificadorPista.FIN) {

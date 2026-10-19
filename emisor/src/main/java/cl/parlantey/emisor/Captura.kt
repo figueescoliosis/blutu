@@ -17,7 +17,7 @@ import cl.parlantey.core.Track
 /**
  * Captura de lo que suena en el teléfono (Android 10+): `AudioRecord` con
  * `AudioPlaybackCaptureConfiguration` sobre una MediaProjection ya concedida, a 48 kHz estéreo.
- * Un hilo con prioridad de audio lee de a 10 ms y escribe en [cola]; el hilo de E/S la envía.
+ * Un hilo con prioridad de audio lee de a 20 ms y escribe en [cola]; el hilo de E/S la envía.
  * Las apps que no permiten la captura (o usos como las llamadas) llegan como silencio.
  */
 class Captura @RequiresApi(29) constructor(proyeccion: MediaProjection) {
@@ -84,7 +84,7 @@ class Captura @RequiresApi(29) constructor(proyeccion: MediaProjection) {
 
     private fun leer() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-        val buf = ShortArray(TASA / 100 * CANALES) // 10 ms
+        val buf = ShortArray(TASA / 50 * CANALES) // 20 ms: menos despertares, la latencia casi no cambia
         while (activa) {
             val n = grabador.read(buf, 0, buf.size)
             if (n < 0) {

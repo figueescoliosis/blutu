@@ -597,4 +597,20 @@ public class FlujoEmisorTest {
         assertEquals(1, contar(t, Protocolo.CONFIG));
         assertTrue("con el STATE viejo ignorado, envía el objetivo entero", contar(t, Protocolo.AUDIO) >= 86);
     }
+
+    /** En vivo, sin bloque completo, espera lo que falta para completarlo (no despierta cada 5 ms). */
+    @Test
+    public void enVivoEsperaLoQueFaltaDelBloque() throws IOException {
+        ColaCaptura captura = new ColaCaptura(48000, 2, 250);
+        FlujoEmisor f = new FlujoEmisor(FlujoEmisor.OBJETIVO_EN_VIVO_MS);
+        f.reproducir(new CodificadorPista(captura, Preset.ALTA, true), null, true);
+        Conexion con = new Conexion();
+        f.conectar(con.escritor, con);
+        assertEquals("sin nada: un bloque entero (21 ms)", 21, f.paso(0));
+        captura.escribir(new short[2 * 512], 0, 512);
+        assertEquals("con medio bloque: lo que falta", 10, f.paso(0));
+        captura.escribir(new short[2 * 512], 0, 512);
+        assertEquals(0, f.paso(0));
+        assertEquals(1, contar(con.nuevas(), Protocolo.AUDIO));
+    }
 }

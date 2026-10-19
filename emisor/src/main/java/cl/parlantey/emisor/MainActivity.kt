@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
             copiarMusica = { copiar(vm.textoNotasFase3()) },
             borrarMusica = vm::borrarMusica,
             iniciarCaptura = ::empezarCaptura,
+            elegirSilenciar = vm::elegirSilenciar,
             copiarCapturas = { copiar(vm.textoNotasFase4()) },
             borrarCapturas = vm::borrarCapturas,
             copiarMediciones = { copiar(vm.textoParaNotas()) },

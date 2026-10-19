@@ -54,6 +54,7 @@ class ServicioEmisor : Service() {
     // Captura de todo el audio (Android 10+); solo el hilo principal.
     private var proyeccion: MediaProjection? = null
     private var captura: Captura? = null
+    private lateinit var silenciador: Silenciador
 
     private val renovarWakeLock = object : Runnable {
         override fun run() {
@@ -84,6 +85,8 @@ class ServicioEmisor : Service() {
         super.onCreate()
         Almacen.iniciar(this)
         ColaMusica.cargar(this)
+        silenciador = Silenciador(this)
+        silenciador.restaurar() // si Android cerró la app con el teléfono silenciado
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CANAL, "Conexión con el receptor", NotificationManager.IMPORTANCE_LOW).apply {
@@ -145,6 +148,9 @@ class ServicioEmisor : Service() {
             )
             ACCION_COLA -> supervisor?.comando(Comando.ColaCambiada)
             ACCION_CAPTURA -> iniciarCaptura(intent!!)
+            ACCION_SILENCIO -> if (captura != null) {
+                if (intent!!.getBooleanExtra(EXTRA_SILENCIAR, true)) silenciador.silenciar() else silenciador.restaurar()
+            }
             ACCION_PROBAR -> supervisor?.comando(
                 Comando.Probar(WifiGalaxy.valueOf(intent.getStringExtra(EXTRA_WIFI) ?: WifiGalaxy.SIN_DATO.name)),
             )
@@ -272,6 +278,7 @@ class ServicioEmisor : Service() {
         }
         proyeccion = p
         captura = c
+        if (intent.getBooleanExtra(EXTRA_SILENCIAR, true)) silenciador.silenciar()
         s.comando(Comando.IniciarCaptura(c.cola, opcion))
     }
 
@@ -287,6 +294,7 @@ class ServicioEmisor : Service() {
         proyeccion = null
         c?.detener()
         p?.stop()
+        silenciador.restaurar()
         if (p != null) soloConexion()
     }
 
@@ -453,6 +461,8 @@ class ServicioEmisor : Service() {
         const val ACCION_CAPTURA = "cl.parlantey.emisor.CAPTURA"
         const val EXTRA_RESULTADO = "resultado"
         const val EXTRA_DATOS = "datos"
+        const val ACCION_SILENCIO = "cl.parlantey.emisor.SILENCIO"
+        const val EXTRA_SILENCIAR = "silenciar"
         const val ACCION_PROBAR = "cl.parlantey.emisor.PROBAR"
         const val EXTRA_NOMBRE = "nombre"
         const val EXTRA_DIRECCION = "direccion"

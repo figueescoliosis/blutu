@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cl.parlantey.core.Protocolo
@@ -35,6 +36,8 @@ data class Local(
     val descartado: String? = null,
     /** Leyendo los metadatos de las canciones recién elegidas. */
     val agregando: Boolean = false,
+    /** Silenciar este teléfono mientras envía todo el audio (como con audífonos). */
+    val silenciar: Boolean = true,
 )
 
 data class UiEstado(
@@ -56,9 +59,18 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val local = MutableStateFlow(Local(btDisponible = adaptador != null))
 
+    private val ajustes = app.getSharedPreferences("ajustes", android.content.Context.MODE_PRIVATE)
+
     init {
         Almacen.iniciar(app)
         ColaMusica.cargar(app)
+        local.update { it.copy(silenciar = ajustes.getBoolean("silenciar", true)) }
+    }
+
+    fun elegirSilenciar(si: Boolean) {
+        local.update { it.copy(silenciar = si) }
+        ajustes.edit { putBoolean("silenciar", si) }
+        enviar(intent(ServicioEmisor.ACCION_SILENCIO).putExtra(ServicioEmisor.EXTRA_SILENCIAR, si))
     }
 
     val ui: StateFlow<UiEstado> = combine(local, EstadoEmisor.estado, ColaMusica.canciones, ::UiEstado)
@@ -180,7 +192,8 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
         intent(ServicioEmisor.ACCION_CAPTURA)
             .putExtra(ServicioEmisor.EXTRA_RESULTADO, resultado)
             .putExtra(ServicioEmisor.EXTRA_DATOS, datos)
-            .putExtra(ServicioEmisor.EXTRA_PRESET, local.value.opcion.name),
+            .putExtra(ServicioEmisor.EXTRA_PRESET, local.value.opcion.name)
+            .putExtra(ServicioEmisor.EXTRA_SILENCIAR, local.value.silenciar),
     )
 
     fun borrarMusica() = EstadoEmisor.actualizar { e -> e.copy(musica = e.musica.filter { !it.terminado }) }

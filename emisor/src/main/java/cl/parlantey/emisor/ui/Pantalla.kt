@@ -27,6 +27,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -84,6 +85,7 @@ data class Acciones(
     val copiarMusica: () -> Unit,
     val borrarMusica: () -> Unit,
     val iniciarCaptura: () -> Unit,
+    val elegirSilenciar: (Boolean) -> Unit,
     val copiarCapturas: () -> Unit,
     val borrarCapturas: () -> Unit,
     val copiarMediciones: () -> Unit,
@@ -558,9 +560,20 @@ private fun TarjetaCaptura(r0: Reproduccion?, local: Local, conectado: Boolean, 
         }
         Button(onClick = acciones.detenerAudio, modifier = Modifier.fillMaxWidth()) { Text("Dejar de enviar") }
     }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Silenciar este teléfono mientras envía", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Como con audífonos: suena solo el Galaxy Y (su volumen se regula con sus teclas). " +
+                    "Al terminar vuelve el volumen de antes.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(checked = local.silenciar, onCheckedChange = acciones.elegirSilenciar)
+    }
     Text(
-        "La latencia (≈ 1 s) sirve para música, no para video. Algunas apps no permiten la captura y llega " +
-            "silencio. Este teléfono también suena: bajarle el volumen puede bajar la captura según el fabricante.",
+        "No se graba la pantalla: Android exige ese permiso para capturar audio y muestra su aviso. La latencia " +
+            "(≈ 0,5 s) sirve para música, no para video. Algunas apps no permiten la captura y llega silencio.",
         style = MaterialTheme.typography.bodySmall,
     )
 }
