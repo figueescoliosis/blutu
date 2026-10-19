@@ -6,8 +6,10 @@ activityCompose = "1.13.0"
 lifecycle = "2.11.0"
 coreKtx = "1.18.0"
 junit = "4.13.2"
+jna = "5.14.0"
 
 [libraries]
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }

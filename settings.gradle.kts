@@ -22,4 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "parlantey"
 
-include(":core", ":receptor", ":emisor")
+include(":core", ":receptor", ":emisor", ":pc")
