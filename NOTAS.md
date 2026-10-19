@@ -425,6 +425,25 @@ Cambios:
 
 **Resultado en los teléfonos (2026-10-19):** el usuario instaló la 0.4.1: «funciona, el samsung queda en silencio».
 
+### Emisor 0.4.2 — cortes al cambiar de app (2026-10-19)
+
+Pedido del usuario: en el emisor el audio se corta al cambiar de app.
+
+Causas probables:
+- **El hilo de enlace corría con prioridad normal.** Ese hilo decodifica y envía. Al cambiar de app, la animación y la app nueva se llevan la CPU; con 500 ms de buffer en vivo, un atraso de medio segundo ya es un corte en el Galaxy Y.
+- **La optimización de batería** (en Samsung, además, «Apps en suspensión») puede frenar la app aunque tenga un servicio en primer plano.
+- **No son de ParlanteY:**
+  - apps que pausan su audio al pasar a segundo plano (por ejemplo, YouTube sin Premium);
+  - apps que bloquean la captura: llega silencio y el emisor avisa a los 3 s;
+  - Wi-Fi de 2,4 GHz descargando en el emisor: comparte la radio con el Bluetooth.
+
+Cambios:
+- El hilo de enlace corre con `THREAD_PRIORITY_AUDIO` (la captura ya usaba `URGENT_AUDIO`).
+- Tarjeta **«Para que no se corte al cambiar de app»**: aparece si la app sigue con optimización de batería. El botón abre el diálogo del sistema `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, o la lista de optimización si el fabricante lo quitó.
+- Lint 0 avisos; tests del core en verde. El receptor no cambia (0.4.0, protocolo v3).
+
+**Pendiente en los teléfonos:** cambiar de app varias veces en «Todo el audio» y en Música, y anotar si el contador de cortes del Galaxy Y sube.
+
 ## Emisor para PC (Windows) — ParlanteY PC 0.5.0
 
 Pedido del usuario: «un exe en mi PC que se conecte al receptor para mandarle el audio de mi PC». Elegido: Bluetooth; Windows 10 u 11 de 64 bits.

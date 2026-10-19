@@ -66,6 +66,7 @@ import kotlinx.coroutines.delay
 data class Acciones(
     val pedirPermiso: () -> Unit,
     val abrirAjustesApp: () -> Unit,
+    val quitarRestriccionBateria: () -> Unit,
     val encenderBluetooth: () -> Unit,
     val refrescar: () -> Unit,
     val conectar: (Dispositivo) -> Unit,
@@ -126,6 +127,7 @@ fun Pantalla(ui: UiEstado, acciones: Acciones) {
                 else -> listaVinculados(local.vinculados, acciones)
             }
             if (local.btDisponible && local.permisoOk) {
+                if (!local.sinRestriccionBateria && enlace != Enlace.Inactivo) item { TarjetaBateria(acciones) }
                 musica(ui, enlace is Enlace.Conectado, acciones)
                 if (enlace is Enlace.Conectado || r?.modo == Modo.CAPTURA) {
                     item { TarjetaCaptura(r, local, enlace is Enlace.Conectado, acciones) }
@@ -198,6 +200,16 @@ private fun TarjetaPermiso(acciones: Acciones) = Tarjeta {
     )
     Button(onClick = acciones.pedirPermiso, modifier = Modifier.fillMaxWidth()) { Text("Dar permiso") }
     TextButton(onClick = acciones.abrirAjustesApp) { Text("Si no aparece el diálogo: abrir ajustes de la app") }
+}
+
+@Composable
+private fun TarjetaBateria(acciones: Acciones) = Tarjeta {
+    Text("Para que no se corte al cambiar de app", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Android está optimizando la batería de ParlanteY: al abrir otra app o apagar la pantalla puede frenar " +
+            "el envío. Permite que funcione sin restricciones.",
+    )
+    Button(onClick = acciones.quitarRestriccionBateria, modifier = Modifier.fillMaxWidth()) { Text("Quitar restricción") }
 }
 
 @Composable

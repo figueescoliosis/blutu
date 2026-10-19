@@ -2,6 +2,7 @@ package cl.parlantey.emisor
 
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import cl.parlantey.core.ByeRecibidoException
@@ -170,6 +171,9 @@ class Supervisor(
     // --- Hilo de enlace.
 
     private fun ejecutar() {
+        // Este hilo decodifica y envía: con la prioridad normal, al cambiar de app (la animación y
+        // la app nueva se llevan la CPU) se atrasa más que el buffer en vivo (500 ms) y hay cortes.
+        Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         var intento = 0
         var huboHello = false
         var desdeFallaMs = 0L

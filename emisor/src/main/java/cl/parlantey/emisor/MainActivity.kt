@@ -1,7 +1,9 @@
 package cl.parlantey.emisor
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -23,6 +25,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cl.parlantey.emisor.ui.Acciones
 import cl.parlantey.emisor.ui.Pantalla
@@ -69,6 +72,7 @@ class MainActivity : ComponentActivity() {
         val acciones = Acciones(
             pedirPermiso = ::pedirPermisoBluetooth,
             abrirAjustesApp = ::abrirAjustesApp,
+            quitarRestriccionBateria = ::quitarRestriccionBateria,
             encenderBluetooth = ::encenderBluetooth,
             refrescar = vm::refrescar,
             conectar = vm::conectar,
@@ -154,6 +158,23 @@ class MainActivity : ComponentActivity() {
 
     private fun abrirAjustesApp() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+    }
+
+    /**
+     * El diálogo directo del sistema («¿Permitir que se ejecute en segundo plano?»); si el fabricante
+     * lo quitó, la lista de optimización de batería. Al volver, onResume refresca la tarjeta.
+     */
+    @SuppressLint("BatteryLife") // app instalada a mano, no de Play: el envío en vivo lo necesita
+    private fun quitarRestriccionBateria() {
+        try {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                abrirAjustesApp()
+            }
+        }
     }
 
     /** Permiso de grabar audio → consentimiento de MediaProjection → el servicio. */

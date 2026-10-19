@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Solo dispositivos ya vinculados: sin discovery, sin BLUETOOTH_SCAN ni ubicación. -->
     <uses-permission
@@ -14,6 +15,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Pedir quedar fuera de la optimización de batería: si no, al cambiar de app Android frena el envío. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Modo «Todo el audio» (Android 10+): MediaProjection + captura de reproducción con AudioRecord. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

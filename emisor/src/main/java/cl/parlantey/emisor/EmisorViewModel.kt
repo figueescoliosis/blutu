@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,6 +39,8 @@ data class Local(
     val agregando: Boolean = false,
     /** Silenciar este teléfono mientras envía todo el audio (como con audífonos). */
     val silenciar: Boolean = true,
+    /** Sin optimización de batería: Android no frena el envío al cambiar de app ni con la pantalla apagada. */
+    val sinRestriccionBateria: Boolean = true,
 )
 
 data class UiEstado(
@@ -97,7 +100,11 @@ class EmisorViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             emptyList()
         }
-        local.update { it.copy(permisoOk = permiso, btEncendido = encendido, vinculados = vinculados) }
+        val app = getApplication<Application>()
+        val bateria = app.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(app.packageName)
+        local.update {
+            it.copy(permisoOk = permiso, btEncendido = encendido, vinculados = vinculados, sinRestriccionBateria = bateria)
+        }
     }
 
     fun conectar(d: Dispositivo) {
