@@ -46,6 +46,7 @@ final class Ventana {
     private final JButton enviar = new JButton("Enviar el audio del PC");
     private final JRadioButton[] opciones = new JRadioButton[EstadoPc.Opcion.values().length];
     private final JLabel auto = new JLabel(" ");
+    private final JLabel pie = new JLabel(" ");
     private final JCheckBox silenciar = new JCheckBox("Silenciar el PC mientras envía (suena solo el Galaxy Y)");
     private final JLabel vivo = new JLabel(" ");
     private final JLabel formato = new JLabel(" ");
@@ -102,6 +103,19 @@ final class Ventana {
         }
         agregar(p, presets);
         agregar(p, auto);
+        JPanel latencias = new JPanel();
+        latencias.setLayout(new BoxLayout(latencias, BoxLayout.X_AXIS));
+        latencias.add(new JLabel("Latencia: "));
+        ButtonGroup gl = new ButtonGroup();
+        long guardadaMs = ajustes.latenciaMs();
+        for (int i = 0; i < LATENCIAS_MS.length; i++) {
+            long ms = LATENCIAS_MS[i];
+            JRadioButton b = new JRadioButton(LATENCIAS[i] + " " + ms + " ms", ms == guardadaMs);
+            b.addActionListener(e -> elegirLatencia(ms));
+            gl.add(b);
+            latencias.add(b);
+        }
+        agregar(p, latencias);
         silenciar.setSelected(ajustes.silenciar());
         silenciar.addActionListener(e -> {
             ajustes.silenciar(silenciar.isSelected());
@@ -121,7 +135,8 @@ final class Ventana {
         botones.add(Box.createHorizontalStrut(8));
         botones.add(copiar);
         agregar(p, botones);
-        agregar(p, new JLabel("<html><small>La latencia (≈ 0,5 s) sirve para música, no para video.</small></html>"));
+        agregar(p, pie);
+        mostrarPie();
 
         actualizar.addActionListener(e -> cargarVinculados());
         conectar.addActionListener(e -> alternarConexion());
@@ -173,6 +188,23 @@ final class Ventana {
             supervisor.opcion(o);
         }
         mostrarEstado(ultimo);
+    }
+
+    private static final String[] LATENCIAS = {"Normal", "Baja", "Mínima"};
+    private static final long[] LATENCIAS_MS = {500, 250, 150};
+
+    private void elegirLatencia(long ms) {
+        ajustes.latenciaMs(ms);
+        if (supervisor != null) {
+            supervisor.latencia(ms);
+        }
+        mostrarPie();
+    }
+
+    private void mostrarPie() {
+        long ms = ajustes.latenciaMs();
+        pie.setText("<html><small>Latencia ≈ " + ms + " ms + lo que tarda el enlace"
+                + (ms < 500 ? "; si se corta, sube la latencia." : ".") + " Para video se nota el atraso.</small></html>");
     }
 
     private void cargarVinculados() {
@@ -274,17 +306,17 @@ final class Ventana {
         sb.append("Emisor: PC ").append(System.getProperty("os.name")).append(' ').append(System.getProperty("os.version"))
                 .append(" · ParlanteY PC ").append(v != null ? v : "dev").append(" · protocolo v").append(Protocolo.VERSION)
                 .append("\n\n");
-        sb.append("| Inicio | Duración | Preset | Formato | Cortes | Latencia ≈ mín/prom/máx (ms) | Buffer mín/prom/máx (ms) | "
-                + "Descartado (ms) | Reconexiones |\n|---|---|---|---|---|---|---|---|---|\n");
+        sb.append("| Inicio | Duración | Preset | Objetivo | Formato | Cortes | Latencia ≈ mín/prom/máx (ms) | Buffer mín/prom/máx (ms) | "
+                + "Descartado (ms) | Reconexiones |\n|---|---|---|---|---|---|---|---|---|---|\n");
         if (supervisor != null) {
             for (SupervisorPc.Resumen r : supervisor.resumenes()) {
                 long d = (r.hastaMs - r.desdeMs) / 1000;
                 String lat = r.muestras == 0 ? "—" : r.latenciaMin + "/" + r.latenciaSuma / r.muestras + "/" + r.latenciaMax;
                 String buf = r.muestras == 0 ? "—" : r.bufferMin + "/" + r.bufferSuma / r.muestras + "/" + r.bufferMax;
-                sb.append(String.format(Locale.ROOT, "| %s | %d:%02d:%02d%s | %s%s | %s | %d | %s | %s | %d | %d |%n",
+                sb.append(String.format(Locale.ROOT, "| %s | %d:%02d:%02d%s | %s%s | %s | %s | %d | %s | %s | %d | %d |%n",
                         r.inicio, d / 3600, d / 60 % 60, d % 60, r.terminado ? "" : " (en curso)",
                         r.presets.isEmpty() ? "—" : r.presets, r.opcion.equals("Auto") ? " (Auto)" : "",
-                        r.formato.isEmpty() ? "—" : r.formato, r.cortes, lat, buf, r.descartadosMs, r.reconexiones));
+                        r.latencias.isEmpty() ? "—" : r.latencias, r.formato.isEmpty() ? "—" : r.formato, r.cortes, lat, buf, r.descartadosMs, r.reconexiones));
             }
         }
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString()), null);

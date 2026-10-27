@@ -24,6 +24,7 @@
     <!-- «48 kHz estéreo · Alta · dec 1,2 ms» -->
     <string name="formato">%1$s kHz %2$s · %3$s · dec %4$s ms</string>
     <string name="en_vivo">en vivo</string>
+    <string name="salida_audio">Salida de audio: %1$d ms</string>
     <string name="mono">mono</string>
     <string name="estereo">estéreo</string>
     <string name="diagnostico">subcortes %1$d · desbordes %2$d · err. salida %3$d · GC %4$s/min · CPU %5$s %% · prio. audio %6$s · reinicios %7$d</string>

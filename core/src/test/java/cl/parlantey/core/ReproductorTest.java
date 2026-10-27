@@ -627,6 +627,54 @@ public class ReproductorTest {
     }
 
     @Test
+    public void margenesDeDerivaProporcionalesAlObjetivo() {
+        // Normal (y el emisor Android): idénticos a los fijos de antes.
+        assertEquals(150, Reproductor.bandaDeriva(500));
+        assertEquals(100, Reproductor.vueltaDeriva(500));
+        assertEquals(400, Reproductor.topeDeriva(500));
+        // Baja.
+        assertEquals(75, Reproductor.bandaDeriva(250));
+        assertEquals(50, Reproductor.vueltaDeriva(250));
+        assertEquals(200, Reproductor.topeDeriva(250));
+        // Mínima.
+        assertEquals(45, Reproductor.bandaDeriva(150));
+        assertEquals(30, Reproductor.vueltaDeriva(150));
+        assertEquals(120, Reproductor.topeDeriva(150));
+        // Límites.
+        assertEquals(40, Reproductor.bandaDeriva(50));
+        assertEquals(120, Reproductor.topeDeriva(50));
+        assertEquals(150, Reproductor.bandaDeriva(2000));
+        assertEquals(400, Reproductor.topeDeriva(2000));
+    }
+
+    /** Con 250 ms, lo de más se corrige hasta ⅔ de la banda chica (no la de 500). */
+    @Test
+    public void enVivoBajaUsaSuBanda() {
+        Config c = Config.imaAdpcm(48000, 2, 250, true);
+        arrancarCon(c, 17); // ≈ 363 ms: 113 por encima, fuera de la banda de 75
+        correrAlimentando(c, 120000, 1.0);
+        assertTrue("descarta", r.framesDescartados() > 100);
+        assertTrue("volvió a la banda: " + r.bufferMs(), r.bufferMs() < 250 + Reproductor.vueltaDeriva(250) + 30);
+        assertEquals(0, r.cortes());
+    }
+
+    /**
+     * Un objetivo menor que el piso de la salida (8192 frames + 2 bloques = 213 ms) no se puede
+     * sostener: el receptor usa el piso, sin cortes ni bloques descartados.
+     */
+    @Test
+    public void enVivoBajoElPisoDeLaSalidaUsaElPiso() {
+        Config c = Config.imaAdpcm(48000, 2, 150, true);
+        arrancarCon(c, 10);
+        correrAlimentando(c, 60000, 1.0);
+        assertEquals(0, r.cortes());
+        assertEquals(0, r.bloquesDescartados());
+        assertEquals(0, r.framesDuplicados());
+        long piso = 213;
+        assertTrue("cerca del piso: " + r.bufferMs(), Math.abs(r.bufferMs() - piso) <= Reproductor.bandaDeriva(piso));
+    }
+
+    @Test
     public void enVivoDentroDeLaBandaNoCorrige() {
         arrancarCon(VIVO, 24); // ≈ 512 ms
         correrAlimentando(VIVO, 20000, 1.0);
@@ -644,7 +692,7 @@ public class ReproductorTest {
         assertTrue(r.bufferMs() < 700);
         correrAlimentando(VIVO, 120000, 1.0);
         long d = r.framesDescartados();
-        assertTrue("volvió a la banda: " + r.bufferMs(), r.bufferMs() < 500 + Reproductor.DERIVA_VUELTA_MS + 30);
+        assertTrue("volvió a la banda: " + r.bufferMs(), r.bufferMs() < 500 + Reproductor.vueltaDeriva(500) + 30);
         correrAlimentando(VIVO, 20000, 1.0);
         assertEquals("y deja de corregir", d, r.framesDescartados());
         assertEquals(0, r.cortes());
@@ -658,7 +706,7 @@ public class ReproductorTest {
         assertTrue("duplica: " + r.framesDuplicados(), r.framesDuplicados() > 500);
         assertEquals(0, r.framesDescartados());
         assertEquals(0, r.cortes());
-        assertTrue("dentro de la banda: " + r.bufferMs(), r.bufferMs() > 500 - Reproductor.DERIVA_BANDA_MS - 40);
+        assertTrue("dentro de la banda: " + r.bufferMs(), r.bufferMs() > 500 - Reproductor.bandaDeriva(500) - 40);
     }
 
     @Test
@@ -677,7 +725,7 @@ public class ReproductorTest {
         encolar(VIVO, 40, 1000); // llega de golpe lo que retuvo el enlace (~850 ms)
         correrAlimentando(VIVO, 1000, 1.0);
         assertTrue(r.bloquesDescartados() > 0);
-        assertTrue("vuelve bajo el tope: " + r.bufferMs(), r.bufferMs() <= 500 + Reproductor.DERIVA_TOPE_MS + 30);
+        assertTrue("vuelve bajo el tope: " + r.bufferMs(), r.bufferMs() <= 500 + Reproductor.topeDeriva(500) + 30);
         assertEquals(0, r.cortes());
     }
 }

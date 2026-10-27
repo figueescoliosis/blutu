@@ -128,8 +128,15 @@ public final class FlujoEmisor {
     }
 
     /** Otro objetivo (p. ej. archivos ↔ captura); vale desde la próxima pista que empiece. */
+    /**
+     * Cambia el objetivo. Con una pista en curso, el próximo paso le manda al receptor un CONFIG con
+     * el objetivo nuevo: es el mismo formato, así que sigue sonando sin vaciar (PROTOCOLO.md, CONFIG).
+     */
     public void objetivo(long ms) {
         objetivoMs = ms;
+        if (actual != null) {
+            configActual = actual.config(ms);
+        }
     }
 
     public long objetivo() {
@@ -298,7 +305,11 @@ public final class FlujoEmisor {
             escritor.config(configActual);
             configEnviado = configActual;
         }
-        long limite = configActual.enVivo ? configActual.bufferObjetivoMs + MARGEN_EN_VIVO_MS
+        // En vivo, nunca menos que con el objetivo de siempre: el receptor sostiene al menos el piso
+        // de su salida (en el Galaxy Y, 371 ms + 2 bloques), que el emisor no conoce. Con un objetivo
+        // menor el emisor se frenaba con el buffer real bajo y la captura descartaba (NOTAS, PC).
+        long limite = configActual.enVivo
+                ? Math.max(configActual.bufferObjetivoMs, OBJETIVO_EN_VIVO_MS) + MARGEN_EN_VIVO_MS
                 : configActual.bufferObjetivoMs;
         if (nivel >= limite) {
             return ESPERA_LLENO_MS;

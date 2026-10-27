@@ -16,9 +16,10 @@ package cl.parlantey.core;
  *
  * <p><b>En vivo</b> ({@link Config#enVivo}, captura): los relojes del emisor y del receptor no van
  * exactamente a la misma velocidad y el buffer se va corriendo. Si el buffer (suavizado, ~1 s) se
- * aleja más de {@link #DERIVA_BANDA_MS} del objetivo, se descarta o duplica 1 frame por bloque
- * (~1 cada 1000) hasta volver a {@link #DERIVA_VUELTA_MS}. Si hay más que objetivo +
- * {@link #DERIVA_TOPE_MS}, se descartan bloques enteros. Justo después de un corte (durante
+ * aleja más de la banda ({@link #bandaDeriva}) del objetivo, se descarta o duplica 1 frame por bloque
+ * (~1 cada 1000) hasta volver a ⅔ de la banda. Si hay más que objetivo + {@link #topeDeriva}, se
+ * descartan bloques enteros. Los márgenes son proporcionales al objetivo (con 500 ms: 150/100/400),
+ * y el objetivo no baja del piso de la salida (su buffer + 2 bloques). Justo después de un corte (durante
  * {@link #BLOQUES_TRAS_CORTE} bloques), el tope es el objetivo: lo que el enlace retuvo llega todo
  * junto y ya es viejo; sin esto la latencia quedaría alta por minutos (la corrección fina es lenta).
  */
@@ -46,9 +47,16 @@ public final class Reproductor {
     private static final int MAX_REAPERTURAS_SEGUIDAS = 3;
     private static final long PAUSA_TRAS_REAPERTURAS_NS = 5000000000L;
 
-    static final long DERIVA_BANDA_MS = 150;
-    static final long DERIVA_VUELTA_MS = 100;
-    static final long DERIVA_TOPE_MS = 400;
+    /**
+     * En vivo: el objetivo que se sostiene, que no baja del piso de la salida (su buffer + 2 bloques,
+     * el mismo mínimo del umbral de arranque): el nivel incluye lo pendiente en la salida, así que
+     * un objetivo menor no se alcanza nunca y se descartarían bloques sin parar. Los márgenes de la
+     * deriva salen de este objetivo. Se calculan con el umbral, sin asignar.
+     */
+    private long objetivoVivoMs;
+    private long derivaBanda;
+    private long derivaVuelta;
+    private long derivaTope;
     /** ≈ 3 s a 48 kHz. */
     static final int BLOQUES_TRAS_CORTE = 150;
 
@@ -277,6 +285,25 @@ public final class Reproductor {
         long minimo = (capacidad + config.muestrasPorBloque - 1) / config.muestrasPorBloque + 2;
         long maximo = cola.capacidadBloques() - 2;
         umbralBloques = (int) Math.max(1, Math.min(Math.max(porObjetivo, minimo), maximo));
+        objetivoVivoMs = Math.max(config.bufferObjetivoMs, config.msParaBloques(Math.min(minimo, maximo)));
+        derivaBanda = bandaDeriva(objetivoVivoMs);
+        derivaVuelta = vueltaDeriva(objetivoVivoMs);
+        derivaTope = topeDeriva(objetivoVivoMs);
+    }
+
+    /** En vivo: el buffer se corrige si se aleja más que esto del objetivo (30 %, entre 40 y 150 ms). */
+    public static long bandaDeriva(long objetivoMs) {
+        return Math.max(40, Math.min(150, objetivoMs * 3 / 10));
+    }
+
+    /** La corrección para al volver a esto del objetivo: ⅔ de la banda. */
+    public static long vueltaDeriva(long objetivoMs) {
+        return bandaDeriva(objetivoMs) * 2 / 3;
+    }
+
+    /** Sobre objetivo + esto se descartan bloques enteros (80 %, entre 120 y 400 ms). */
+    public static long topeDeriva(long objetivoMs) {
+        return Math.max(120, Math.min(400, objetivoMs * 8 / 10));
     }
 
     private long bloquesPara(double ms) {
@@ -403,8 +430,8 @@ public final class Reproductor {
                     if (bloquesTrasCorte < BLOQUES_TRAS_CORTE) {
                         bloquesTrasCorte++;
                     }
-                    long tope = config.bufferObjetivoMs
-                            + (bloquesTrasCorte < BLOQUES_TRAS_CORTE ? 0 : DERIVA_TOPE_MS);
+                    long tope = objetivoVivoMs
+                            + (bloquesTrasCorte < BLOQUES_TRAS_CORTE ? 0 : derivaTope);
                     if (config.enVivo && nivelMs > tope) {
                         // Muy atrasado (llegó junto lo que el enlace retuvo): fuera un bloque entero.
                         cola.devolver(b);
@@ -446,14 +473,14 @@ public final class Reproductor {
     private void corregirDeriva(long nivelMs) {
         long x = nivelMs * 32;
         nivelSuavizadoX32 = nivelSuavizadoX32 < 0 ? x : nivelSuavizadoX32 + ((x - nivelSuavizadoX32) >> 5);
-        long error = nivelSuavizadoX32 / 32 - config.bufferObjetivoMs;
+        long error = nivelSuavizadoX32 / 32 - objetivoVivoMs;
         if (correccion == 0) {
-            if (error > DERIVA_BANDA_MS) {
+            if (error > derivaBanda) {
                 correccion = -1;
-            } else if (error < -DERIVA_BANDA_MS) {
+            } else if (error < -derivaBanda) {
                 correccion = 1;
             }
-        } else if (Math.abs(error) < DERIVA_VUELTA_MS) {
+        } else if (Math.abs(error) < derivaVuelta) {
             correccion = 0;
         }
         int ch = config.canales;

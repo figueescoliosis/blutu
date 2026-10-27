@@ -72,10 +72,18 @@ public class SupervisorPcTest {
         assertTrue(ultimo.enviando);
         assertEquals(0, receptor.reproductor.cortes());
         assertTrue("en vivo", receptor.reproductor.config().enVivo);
-        assertEquals(500, receptor.reproductor.config().bufferObjetivoMs);
+        assertEquals("latencia Baja por defecto", 250, receptor.reproductor.config().bufferObjetivoMs);
         assertTrue("latencia " + ultimo.latenciaMs, ultimo.latenciaMs > 100 && ultimo.latenciaMs < 1200);
         assertFalse("hay señal", ultimo.silencio);
         assertEquals("48 kHz estéreo", ultimo.formatoEnvio);
+
+        // Cambiar la latencia en vivo: CONFIG nuevo con el mismo formato, sigue sonando sin cortes.
+        sup.latencia(150);
+        esperarQue("CONFIG con 150 ms", () -> receptor.reproductor.config().bufferObjetivoMs == 150, 3000);
+        Thread.sleep(2000);
+        assertEquals(Reproductor.SONANDO, receptor.reproductor.estado());
+        assertEquals("sin cortes al cambiar la latencia", 0, receptor.reproductor.cortes());
+        assertEquals("250 ms, 150 ms", sup.resumenes().get(0).latencias);
 
         receptor.cortar();
         esperarQue("reconecta", () -> receptor.conexiones == 2 && ultimo.enlace == EstadoPc.Enlace.CONECTADO, 8000);

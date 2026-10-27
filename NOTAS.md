@@ -401,7 +401,7 @@ Versiones: receptor 0.4.0 y emisor 0.4.0 (protocolo v3), release v0.4.0.
 | ④ Con la pantalla del emisor bloqueada: ¿sigue la captura? | [PENDIENTE] |
 | ⑤ En el diálogo de Android aparece «Pantalla completa» (no «una app») | [PENDIENTE] |
 | ⑥ Deriva en el receptor tras 30 min (línea «formato» de la pantalla: «en vivo ±N») | [PENDIENTE] |
-| ⑦ `getMinBufferSize` del Galaxy Y (logcat, línea «minuto»): si 4 × es > ~650 ms, el buffer no entra en la banda | [PENDIENTE] |
+| ⑦ `getMinBufferSize` del Galaxy Y (logcat, línea «minuto»): si 4 × es > ~650 ms, el buffer no entra en la banda | ✓ **371 ms** a 48 kHz estéreo (2026-10-27, línea «Salida de audio» del receptor 0.4.1; adb no detectó el teléfono por USB): 4 × getMinBufferSize ≈ 4 × 93 ms. Entra en la banda de 500 ms; es el piso de la latencia (ver «Emisor para PC», latencia). |
 
 Tabla de «Copiar para NOTAS (Fase 4)»: [PENDIENTE]
 
@@ -482,9 +482,42 @@ Pedido del usuario: «un exe en mi PC que se conecte al receptor para mandarle e
 
 | Prueba | Resultado |
 |---|---|
-| ① `ParlanteY-diagnostico.exe`: ¿ve el adaptador Bluetooth, el Galaxy Y vinculado y la salida de audio? | [PENDIENTE] |
-| ② Conectar al Galaxy Y (receptor 0.4.0 abierto) | [PENDIENTE] |
-| ③ Enviar el audio del PC (YouTube, Spotify): suena, latencia | [PENDIENTE] |
+| ① `ParlanteY-diagnostico.exe`: ¿ve el adaptador Bluetooth, el Galaxy Y vinculado y la salida de audio? | ✓ (2026-10-26, `:pc:run --args="--diagnostico"`, Windows 10 22H2, adaptador TP-Link USB): estructuras 560/40/4; adaptador encendido, vinculados «JBL Go 3» y «GT-S5360L (E4:32:CB:A8:F9:23)»; salida de audio 192 kHz float, 2 canales |
+| ② Conectar al Galaxy Y (receptor 0.4.0 abierto) | ✓ Conecta; RTT 8–23 ms; prueba de enlace **224,7 KB/s** (Auto = Alta) |
+| ③ Enviar el audio del PC (YouTube, Spotify): suena, latencia | ✓ Suena (YouTube); 192 kHz float → 48 kHz estéreo (decima ×4). Latencia: ver la tabla de abajo |
 | ④ «Silenciar el PC»: ¿el PC queda en silencio y el Galaxy Y sigue sonando? | [PENDIENTE] |
-| ⑤ 30 min seguidos: cortes, latencia («Copiar para NOTAS») | [PENDIENTE] |
+| ⑤ 30 min seguidos: cortes, latencia («Copiar para NOTAS») | Parcial: ≈ 4 min (Normal) + 9:37 min (Mínima, Baja y Normal en vivo), **0 cortes**. Faltan los 30 min seguidos |
 | ⑥ Apagar y encender el Bluetooth del PC: reconecta solo | [PENDIENTE] |
+
+### Latencia elegible (PC 0.5.0 + receptor 0.4.1, 2026-10-26/27)
+
+Pedido del usuario: bajar la latencia PC → Galaxy Y (≈ 0,5–0,7 s).
+
+**Cambios** (protocolo v3, sin cambios de formato; PROTOCOLO.md, CONFIG):
+- **PC:** selector «Latencia»: Normal 500 / **Baja 250 (por defecto)** / Mínima 150 ms, guardado en Ajustes. Cambiarla enviando manda un CONFIG nuevo del mismo formato (`FlujoEmisor.objetivo`): sigue sonando sin vaciar. «Copiar para NOTAS» agrega la columna «Objetivo».
+- **core/Reproductor:** márgenes de la deriva proporcionales al objetivo (banda 30 % entre 40 y 150, vuelta ⅔, tope 80 % entre 120 y 400; con 500 ms, los 150/100/400 de antes). El objetivo efectivo no baja del **piso de la salida** (AudioTrack + 2 bloques): por debajo, el receptor descartaba bloques sin parar.
+- **core/FlujoEmisor:** en vivo, el tope del emisor es máx(objetivo, 500) + 400 ms. Con objetivo + 400 y el piso del Galaxy Y, el emisor se frenaba (su estimación del nivel se pasa hasta 250 ms entre STATE y STATE), la captura descartaba y la latencia subía: Mínima daba 498–522 ms con 67 → 137 ms descartados.
+- **Receptor 0.4.1:** muestra «Salida de audio: N ms» (el buffer real del AudioTrack).
+
+**Tests JVM:** core 201 + pc 14, todos en verde. Nuevos: márgenes con 500/250/150; Baja usa su banda; objetivo bajo el piso de la salida; simulación de 30 min con ±0,05 % y corte de 3 s con 500, 250 y 150 ms; simulación con la salida real del Galaxy Y (17 808 frames): sin el arreglo del emisor, Mínima descartaba 508 ms en la captura, igual que en el PC. Con 500 ms la simulación da lo mismo que antes (458–698 y 363–444 ms). Lint del receptor 0 avisos; `:receptor:verificarApk` OK (99 349 bytes, firma v1).
+
+**En vivo** (Windows 10, YouTube, preset Alta 48 kHz estéreo, sin silenciar el PC):
+
+| Latencia | Receptor | Buffer (ms) | Latencia ≈ (ms) | Cortes | Descartado en la captura |
+|---|---|---|---|---|---|
+| Normal 500 (antes del cambio, ≈ 4 min) | 0.4.0 | 558–586 | 574–587 (un pico de 826) | 0 | 0 |
+| Baja 250 (≈ 2 min) | 0.4.0 | 365–373 | 373–386 | 0 | 0 |
+| Mínima 150, emisor sin el arreglo | 0.4.1 | 276–328 | 466–566 | 0 | 67 → 137 ms, subiendo |
+| **Mínima 150** (3 min) | 0.4.1 | 348–354 | **369–375** | 0 | 0 |
+| **Baja 250** (3 min, cambiada en vivo) | 0.4.1 | 370 | **391** | 0 | 0 |
+| Normal 500 (3 min, cambiada en vivo) | 0.4.1 | 389 | 414 | 0 | 0 |
+
+«Copiar para NOTAS» de la sesión con el arreglo (Mínima → Baja → Normal en vivo):
+
+| Inicio | Duración | Preset | Objetivo | Formato | Cortes | Latencia ≈ mín/prom/máx (ms) | Buffer mín/prom/máx (ms) | Descartado (ms) | Reconexiones |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-27 00:06:40 | 0:09:37 | Alta | 150 ms, 250 ms, 500 ms | 48 kHz estéreo | 0 | 327/384/662 | 315/360/426 | 0 | 0 |
+
+**Conclusión:** la latencia bajó de ≈ 580 a **≈ 370–390 ms** sin cortes. Baja y Mínima dan casi lo mismo: las frena el **AudioTrack del Galaxy Y (371 ms = 4 × getMinBufferSize)**, no la reserva. Al subir a Normal en vivo, el buffer no crece mientras siga en la banda (500 ± 150); arrancando en Normal queda en ≈ 580.
+
+**Propuesta, sin aplicar (regla de CLAUDE.md: buffer = 4 × `getMinBufferSize`):** receptor 0.4.2 con 2 × `getMinBufferSize` (≈ 185 ms): piso ≈ 228 ms y latencia esperada ≈ 250 ms en Mínima. Riesgo: menos colchón ante el GC de Dalvik y la CPU ARMv6 → medir cortes en 30 min antes de adoptarlo. Pendiente de aprobación.

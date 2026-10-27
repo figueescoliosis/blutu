@@ -64,6 +64,7 @@ public class MainActivity extends Activity {
     private boolean vReproduciendo;
     private boolean vFinalizado;
     private long vDeriva;
+    private long vSalidaMs;
     private Track vTrack;
     private long vBufferMs = -1;
     private int vCortes = -1;
@@ -222,14 +223,20 @@ public class MainActivity extends Activity {
         Config c = r.config();
         long decod = r.decodPromedioUs();
         long deriva = r.framesDuplicados() - r.framesDescartados() - r.bloquesDescartados() * 1024;
-        if (c != vConfig || decod / 100 != vDecodUs / 100 || deriva != vDeriva) {
+        // Buffer real del AudioTrack (4 × getMinBufferSize): el piso de la latencia.
+        long salidaMs = c == null ? 0 : s.capacidadSalidaFrames() * 1000L / c.sampleRate;
+        if (c != vConfig || decod / 100 != vDecodUs / 100 || deriva != vDeriva || salidaMs != vSalidaMs) {
             vConfig = c;
             vDecodUs = decod;
             vDeriva = deriva;
+            vSalidaMs = salidaMs;
             String texto = c == null ? getString(R.string.formato_ninguno) : textoFormato(c, decod);
             if (c != null && c.enVivo) {
                 // En vivo: frames que la compensación de deriva agregó (+) o quitó (−).
                 texto = texto + " · " + getString(R.string.en_vivo) + " " + (deriva > 0 ? "+" : "") + deriva;
+            }
+            if (salidaMs > 0) {
+                texto = texto + "\n" + getString(R.string.salida_audio, salidaMs);
             }
             formato.setText(texto);
         }

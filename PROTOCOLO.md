@@ -116,18 +116,31 @@ Payload de 12 bytes:
 | sampleRate | u32 | 4000 a 48 000 Hz (lo que acepta `AudioTrack` en Android 2.3) |
 | canales | u8 | 1 o 2 |
 | muestrasPorBloque | u16 | par, ≥ 2, y el AUDIO resultante debe caber en 64 KiB. El emisor usa **1024**. |
-| bufferObjetivoMs | u32 | nivel de buffer que debe mantener el receptor (Archivos 2000 ms, Todo el audio 500 ms) |
+| bufferObjetivoMs | u32 | nivel de buffer que debe mantener el receptor (Archivos 2000 ms; Todo el audio 500 ms en Android; en el PC, Normal 500, Baja 250 o Mínima 150 ms) |
 
 - **`flags` bit 0 = en vivo (v3)** (`Protocolo.FLAG_EN_VIVO`): el audio es una captura que no se puede adelantar ni atrasar. El receptor compensa la deriva de reloj (ver abajo). Sin el bit (archivos, tono), no.
 - Un valor fuera de rango es error de protocolo: BYE(2) y cierre.
 - Cada CONFIG nuevo reemplaza al anterior. Si cambian la tasa o los canales, el receptor vacía la cola y recrea `AudioTrack`. Si solo cambian el objetivo o el bit en vivo, sigue sonando con los valores nuevos.
 
 **Compensación de deriva (en vivo).** El reloj de la captura y el de la salida del receptor no van exactamente iguales (±50 ppm es común), así que el buffer se corre solo. El receptor, ya con la salida llena una vez:
+- sostiene el **objetivo efectivo** = máx(`bufferObjetivoMs`, buffer de `AudioTrack` + 2 bloques). Es el mismo piso del umbral de arranque: el nivel incluye lo pendiente en `AudioTrack`, así que un objetivo menor no se alcanza nunca;
 - mide el nivel (bloques en cola + audio real pendiente en `AudioTrack`) antes de cada bloque y lo suaviza (≈ 0,7 s);
-- si se aleja más de **150 ms** de `bufferObjetivoMs`, descarta (nivel alto) o duplica (nivel bajo) el último frame de cada bloque de 1024 (≈ 1 frame cada 1000, 0,1 %, inaudible) hasta volver a **100 ms** del objetivo;
-- si el nivel supera el objetivo + **400 ms** (llegó junto lo que el enlace retuvo), descarta bloques enteros hasta bajar de ahí.
+- si se aleja más que la **banda** del objetivo efectivo, descarta (nivel alto) o duplica (nivel bajo) el último frame de cada bloque de 1024 (≈ 1 frame cada 1000, 0,1 %, inaudible) hasta volver a la **vuelta**;
+- si el nivel supera el objetivo efectivo + el **tope** (llegó junto lo que el enlace retuvo), descarta bloques enteros hasta bajar de ahí.
 
-**Emisor en vivo.** Envía apenas tiene un bloque, mientras el nivel estimado sea menor que el objetivo + 400 ms. El control de flujo no frena antes, para no tapar la deriva que el receptor corrige. Si el enlace se atrasa y llega a ese tope, lo capturado espera como mucho 250 ms (`ColaCaptura`); más, se descarta lo más antiguo: la latencia no crece.
+Los márgenes son proporcionales al objetivo efectivo (`Reproductor.bandaDeriva`, `vueltaDeriva`, `topeDeriva`):
+
+| | Fórmula | 500 ms | 250 ms | 150 ms |
+|---|---|---|---|---|
+| banda | 30 %, entre 40 y 150 ms | 150 | 75 | 45 |
+| vuelta | ⅔ de la banda | 100 | 50 | 30 |
+| tope | 80 %, entre 120 y 400 ms | 400 | 200 | 120 |
+
+Con 500 ms son los valores fijos de antes (150/100/400). Ejemplo: con un `AudioTrack` de 8192 frames a 48 kHz, el piso es 10 bloques = 213 ms, y un CONFIG de 150 ms se sostiene en 213 (banda 63, vuelta 42, tope 170).
+
+Un CONFIG nuevo con el mismo formato y otro `bufferObjetivoMs` (el PC al cambiar la latencia) no vacía nada: el receptor sigue sonando y la compensación lleva el nivel al objetivo nuevo.
+
+**Emisor en vivo.** Envía apenas tiene un bloque, mientras el nivel estimado sea menor que **máx(objetivo, 500) + 400 ms**. El control de flujo no frena antes, para no tapar la deriva que el receptor corrige. El tope no baja con el objetivo por dos razones: entre un STATE y otro (250 ms) la estimación cuenta lo enviado pero no lo que ya sonó, y el receptor sostiene al menos el piso de su salida, que el emisor no conoce (en el Galaxy Y, 371 + 43 ms). Con objetivo + 400 y un objetivo de 150 ms, el emisor se frenaba con el buffer real bajo y la captura descartaba (NOTAS.md). Si el enlace se atrasa y llega a ese tope, lo capturado espera como mucho 250 ms (`ColaCaptura`); más, se descarta lo más antiguo: la latencia no crece.
 
 ### 0x03 AUDIO (E→R)
 
@@ -279,3 +292,4 @@ Con la regla del 70 %, la prueba de enlace debe medir al menos:
 | 1 | 2026-10-18 | Tras la revisión de la Fase 2, sin cambios de formato: pausa, `ultimoSeq` y `cortes` son por conexión (también en el primer STATE); DETENER quita la pausa; se quita la regla de "más bloques en vuelo que la capacidad", que nunca cambiaba el resultado. |
 | 2 | 2026-10-18 | Fase 3: **CONTROL 5 = FIN** (sonar lo que queda y detenerse sin contar corte). Cambios de pista: pedido (VACIAR → TRACK → CONFIG → AUDIO), fin natural con el mismo formato (sin pausa, TRACK cuando suena) y con otro formato (FIN, esperar el receptor vacío, TRACK → CONFIG → AUDIO); TRACK va antes que CONFIG. Un receptor v1 y un emisor v2 (o al revés) no conectan: BYE(1). |
 | 3 | 2026-10-18 | Fase 4: **CONFIG con `flags` bit 0 = en vivo**; compensación de deriva en el receptor (±150 ms → 1 frame por bloque, hasta ±100 ms; sobre objetivo + 400 ms, bloques enteros); emisor en vivo hasta objetivo + 400 ms y captura acotada a 250 ms. Receptor v2 y emisor v3 (o al revés) no conectan: BYE(1). |
+| 3 | 2026-10-26 | Sin cambios de formato: márgenes de la deriva proporcionales al objetivo (banda 30 %, vuelta ⅔, tope 80 %; con 500 ms, iguales a antes) y objetivo efectivo ≥ buffer de `AudioTrack` + 2 bloques. El emisor de PC elige 500, 250 o 150 ms y lo cambia en vivo con un CONFIG del mismo formato; el tope del emisor en vivo es máx(objetivo, 500) + 400 ms. |

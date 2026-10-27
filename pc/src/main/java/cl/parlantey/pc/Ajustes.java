@@ -39,6 +39,15 @@ public final class Ajustes {
         p.put("opcion", o);
     }
 
+    /** Buffer objetivo en vivo (ms): Normal 500, Baja 250 (por defecto), Mínima 150. */
+    public long latenciaMs() {
+        return p.getLong("latenciaMs", 250);
+    }
+
+    public void latenciaMs(long ms) {
+        p.putLong("latenciaMs", ms);
+    }
+
     public boolean silenciar() {
         return p.getBoolean("silenciar", true);
     }

@@ -63,6 +63,7 @@ public final class SupervisorPc {
     private volatile boolean quiereEnviar;
     private volatile EstadoPc.Opcion opcionPedida;
     private volatile boolean quiereSilenciar;
+    private volatile long latenciaPedida;
     private volatile boolean pruebaPedida;
 
     // --- Para el vigía.
@@ -75,6 +76,7 @@ public final class SupervisorPc {
     private final EstadoPc estado = new EstadoPc();
     private ColaCaptura cola;
     private EstadoPc.Opcion opcionAplicada;
+    private long latenciaAplicada;
     private boolean silencioNoSirve;
     private long silenciadoDesdeNs;
     /** Última vez que llegó señal real (0 = nunca en este envío). */
@@ -94,6 +96,7 @@ public final class SupervisorPc {
         public long hastaMs;
         public String opcion;
         public String presets = "";
+        public String latencias = "";
         public String formato = "";
         public long cortes;
         public long bufferMin = Long.MAX_VALUE;
@@ -114,6 +117,7 @@ public final class SupervisorPc {
             r.hastaMs = hastaMs;
             r.opcion = opcion;
             r.presets = presets;
+            r.latencias = latencias;
             r.formato = formato;
             r.cortes = cortes;
             r.bufferMin = bufferMin;
@@ -142,7 +146,9 @@ public final class SupervisorPc {
         estado.dispositivo = dispositivo;
         estado.opcion = opcion;
         estado.kBps = ajustes.kBps(dispositivo.direccion);
-        control.modo(true, FlujoEmisor.OBJETIVO_EN_VIVO_MS);
+        latenciaPedida = ajustes.latenciaMs();
+        latenciaAplicada = latenciaPedida;
+        control.modo(true, latenciaAplicada);
         hiloEnlace = new Thread(this::ejecutar, "ParlanteY-enlace");
         hiloVigia = new Thread(this::vigilar, "ParlanteY-vigia");
         hiloVigia.setDaemon(true);
@@ -162,6 +168,12 @@ public final class SupervisorPc {
 
     public void opcion(EstadoPc.Opcion o) {
         opcionPedida = o;
+        despertar();
+    }
+
+    /** Cambia el buffer objetivo en vivo; enviando, el receptor recibe un CONFIG nuevo y sigue sonando. */
+    public void latencia(long ms) {
+        latenciaPedida = ms;
         despertar();
     }
 
@@ -404,6 +416,11 @@ public final class SupervisorPc {
             estado.preset = p;
             publicar();
         }
+        long l = latenciaPedida;
+        if (l != latenciaAplicada) {
+            latenciaAplicada = l;
+            control.modo(true, l);
+        }
         // Se silencia recién con señal (algo suena): así se puede comprobar que la captura sigue.
         long ahora = System.nanoTime();
         boolean conSenal = ultimaSenalNs != 0 && ahora - ultimaSenalNs < 600000000L;
@@ -548,6 +565,10 @@ public final class SupervisorPc {
         r.cortes = estado.cortes;
         if (estado.preset != null && !r.presets.contains(estado.preset.nombre)) {
             r.presets = r.presets.isEmpty() ? estado.preset.nombre : r.presets + ", " + estado.preset.nombre;
+        }
+        String lat = latenciaAplicada + " ms";
+        if (!r.latencias.contains(lat)) {
+            r.latencias = r.latencias.isEmpty() ? lat : r.latencias + ", " + lat;
         }
         if (estado.formatoEnvio != null) {
             r.formato = estado.formatoEnvio;
