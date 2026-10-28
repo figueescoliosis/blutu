@@ -1,4 +1,4 @@
-# Protocolo ParlanteY — versión 3
+# Protocolo ParlanteY — versión 4
 
 Fuente de verdad del protocolo entre el **emisor** (Android 8+) y el **receptor** (Galaxy Y, Android 2.3).
 Todo cambio exige: actualizar este archivo + los tests de `core` + `Protocolo.VERSION` (y el historial al final).
@@ -24,6 +24,7 @@ Implementación: `core/src/main/java/cl/parlantey/core/`.
 | 0x07 PING / 0x08 PONG | ✅ Fase 0 | ✅ Fase 0 |
 | 0x09 TEST_DATA / 0x0A TEST_RESULT | ✅ Fase 0 | ✅ Fase 0 |
 | 0x0B BYE | ✅ Fase 0 | ✅ Fase 0 |
+| 0x0C MIC_CONFIG / 0x0D MIC_AUDIO | ✅ v4 | ✅ v4: envía la app ParlanteY Mic; recibe el emisor de PC (el emisor Android las descarta) |
 
 ## 1. Transporte
 
@@ -223,6 +224,16 @@ Payload de 13 bytes:
 
 Tras enviar o recibir BYE, la conexión se cierra.
 
+### 0x0C MIC_CONFIG / 0x0D MIC_AUDIO (R→E, v4)
+
+El micrófono del receptor hacia el emisor: el mismo camino que la música, al revés. Lo envía solo la app **ParlanteY Mic** (flavor `mic` del receptor); el receptor normal nunca lo hace.
+
+- **MIC_CONFIG**: el payload y los `flags` de CONFIG. La app Mic manda IMA ADPCM, **16 kHz, mono, 256 muestras por bloque (16 ms), objetivo 60 ms, en vivo** (`Protocolo.TASA_MIC`, `MUESTRAS_MIC`, `OBJETIVO_MIC_MS`).
+- **MIC_AUDIO**: el payload de AUDIO (`seq u32` + bloque ADPCM, §6), con seq propio desde 0 por conexión. No cambia el `ultimoSeq` de STATE (que solo cuenta AUDIO). ≈ 8,5 KB/s con cabeceras.
+- La app Mic los empieza a enviar sola después del HELLO, mientras dure la conexión, sin que el emisor los pida. Ningún STATE ni control de flujo: si el enlace se atrasa, el `write` bloquea y `AudioRecord` pierde lo más viejo, así que la latencia no crece.
+- **En el emisor:** MIC_CONFIG y MIC_AUDIO se tratan como CONFIG y AUDIO en el receptor: cola (`ColaBloques`) → `Reproductor` en vivo, con su compensación de deriva y su umbral de arranque. Un MIC_AUDIO cuyo largo no es el del MIC_CONFIG vigente es un error de protocolo. Un emisor sin micrófono (`SesionEmisor` sin `recibirMicrofono`) los lee y los descarta.
+- **Fin de la conexión:** el emisor deja de sonar el micrófono (como DETENER). Al reconectar, llega un MIC_CONFIG nuevo.
+
 ## 6. Bloque IMA ADPCM (payload de AUDIO tras `seq`)
 
 Implementación: `ImaAdpcm` (tablas y decodificador) y `CodificadorIma`.
@@ -293,3 +304,4 @@ Con la regla del 70 %, la prueba de enlace debe medir al menos:
 | 2 | 2026-10-18 | Fase 3: **CONTROL 5 = FIN** (sonar lo que queda y detenerse sin contar corte). Cambios de pista: pedido (VACIAR → TRACK → CONFIG → AUDIO), fin natural con el mismo formato (sin pausa, TRACK cuando suena) y con otro formato (FIN, esperar el receptor vacío, TRACK → CONFIG → AUDIO); TRACK va antes que CONFIG. Un receptor v1 y un emisor v2 (o al revés) no conectan: BYE(1). |
 | 3 | 2026-10-18 | Fase 4: **CONFIG con `flags` bit 0 = en vivo**; compensación de deriva en el receptor (±150 ms → 1 frame por bloque, hasta ±100 ms; sobre objetivo + 400 ms, bloques enteros); emisor en vivo hasta objetivo + 400 ms y captura acotada a 250 ms. Receptor v2 y emisor v3 (o al revés) no conectan: BYE(1). |
 | 3 | 2026-10-26 | Sin cambios de formato: márgenes de la deriva proporcionales al objetivo (banda 30 %, vuelta ⅔, tope 80 %; con 500 ms, iguales a antes) y objetivo efectivo ≥ buffer de `AudioTrack` + 2 bloques. El emisor de PC elige 500, 250 o 150 ms y lo cambia en vivo con un CONFIG del mismo formato; el tope del emisor en vivo es máx(objetivo, 500) + 400 ms. |
+| 4 | 2026-10-28 | **MIC_CONFIG (0x0C) y MIC_AUDIO (0x0D)**, R→E: micrófono del receptor (app ParlanteY Mic) hacia el emisor, 16 kHz mono en bloques de 256. Lo recibe el emisor de PC y lo suena en «CABLE Input» (VB-Audio Virtual Cable). Receptor v3 y emisor v4 (o al revés) no conectan: BYE(1). |

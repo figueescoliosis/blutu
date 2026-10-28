@@ -179,6 +179,7 @@ final class HiloServidor extends Thread {
                     }
                 }, cl.parlantey.core.Reloj.SISTEMA);
         HiloEstado estado = new HiloEstado(s, socket);
+        HiloMicrofono microfono = BuildConfig.MICROFONO ? new HiloMicrofono(s.escritor()) : null;
         try {
             s.iniciar();
             sesion = s;
@@ -186,6 +187,9 @@ final class HiloServidor extends Thread {
                 s.despedir(); // "Detener receptor" llegó mientras se aceptaba esta conexión
             }
             estado.start();
+            if (microfono != null) {
+                microfono.start(); // después del HELLO: MIC_CONFIG no puede ir primero
+            }
             int codigo;
             do {
                 codigo = s.procesarTrama();
@@ -205,6 +209,9 @@ final class HiloServidor extends Thread {
         } finally {
             sesion = null;
             estado.detener();
+            if (microfono != null) {
+                microfono.detener();
+            }
             s.terminar(); // como DETENER: la reproducción se detiene y la salida se libera
         }
     }

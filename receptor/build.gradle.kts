@@ -21,8 +21,23 @@ android {
         // targetSdk >= 31, lint exigiría BLUETOOTH_CONNECT y permisos en runtime, que no
         // existen en API 9. La app no se publica en Play.
         targetSdk = 10
-        versionCode = 15
-        versionName = "0.5.8"
+        versionCode = 16
+        versionName = "0.6.0"
+    }
+
+    // Dos apps desde las mismas fuentes: el receptor de siempre y «ParlanteY Mic», que además
+    // manda el micrófono (del audífono) al emisor. Se instalan juntas: distinto applicationId.
+    flavorDimensions += "app"
+    productFlavors {
+        create("normal") {
+            dimension = "app"
+            buildConfigField("boolean", "MICROFONO", "false")
+        }
+        create("mic") {
+            dimension = "app"
+            applicationIdSuffix = ".mic"
+            buildConfigField("boolean", "MICROFONO", "true")
+        }
     }
 
     buildFeatures {
@@ -145,18 +160,23 @@ abstract class VerificarApk : DefaultTask() {
     }
 }
 
-val verificarApk = tasks.register<VerificarApk>("verificarApk") {
+// Una tarea por flavor (verificarNormalDebugApk, verificarMicDebugApk); verificarApk corre las dos.
+val verificarApk = tasks.register("verificarApk") {
     group = "verification"
-    description = "Verifica que el APK debug del receptor instala en Android 2.3 (firma v1, minSdk, dex 035)."
-    buildTools.set(
-        androidComponents.sdkComponents.sdkDirectory.map { it.dir("build-tools/${android.buildToolsVersion}").asFile.path }
-    )
-    minSdk.set(android.defaultConfig.minSdk ?: 9)
+    description = "Verifica que los APK debug del receptor instalan en Android 2.3 (firma v1, minSdk, dex 035)."
 }
 
 androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
-        verificarApk.configure { carpetaApk.set(variant.artifacts.get(SingleArtifact.APK)) }
+        val tarea = tasks.register<VerificarApk>("verificar${variant.name.replaceFirstChar { it.uppercase() }}Apk") {
+            group = "verification"
+            carpetaApk.set(variant.artifacts.get(SingleArtifact.APK))
+            buildTools.set(
+                androidComponents.sdkComponents.sdkDirectory.map { it.dir("build-tools/${android.buildToolsVersion}").asFile.path }
+            )
+            minSdk.set(android.defaultConfig.minSdk ?: 9)
+        }
+        verificarApk.configure { dependsOn(tarea) }
     }
 }
 

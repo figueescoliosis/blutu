@@ -12,6 +12,7 @@ import java.io.OutputStream;
  * <li>PONG → {@link #ping}, y el RTT en vivo ({@link #ultimoRttNs});</li>
  * <li>TEST_RESULT → {@link #probarEnlace};</li>
  * <li>STATE → {@link #estado} (y despierta a {@link #esperarEstado});</li>
+ * <li>MIC_CONFIG / MIC_AUDIO (v4) → la cola de {@link #recibirMicrofono}, si hay; si no, se descartan;</li>
  * <li>BYE, EOF o una trama inválida → la sesión termina: lo que esté esperando, y lo que se llame
  * después, lanza esa causa ({@link #comprobar}).</li>
  * </ul>
@@ -42,6 +43,9 @@ public final class SesionEmisor {
     private volatile long ultimoRttNs = -1;
     private volatile boolean audioActivo;
     private volatile boolean cerrada;
+    private volatile ColaBloques colaMic;
+    /** Solo el hilo lector. */
+    private Config configMic;
 
     // --- Protegido por "this".
     private IOException causa;
@@ -63,6 +67,14 @@ public final class SesionEmisor {
         this.lector = new LectorTramas(entrada);
         this.escritor = new EscritorTramas(salida);
         this.reloj = reloj;
+    }
+
+    /**
+     * El micrófono del receptor (v4) va a esta cola, que la reproduce un {@link Reproductor} como en
+     * el receptor. Llamar antes de {@link #esperarHello}.
+     */
+    public void recibirMicrofono(ColaBloques cola) {
+        colaMic = cola;
     }
 
     /**
@@ -162,10 +174,60 @@ public final class SesionEmisor {
                 }
                 break;
             }
+            case Protocolo.MIC_CONFIG:
+                recibirMicConfig(Config.leer(lector.datos(), lector.flags()));
+                break;
+            case Protocolo.MIC_AUDIO:
+                recibirMicAudio();
+                break;
             default:
                 // HELLO repetido, tipos desconocidos o que el emisor no usa: el payload ya se consumió.
                 break;
         }
+    }
+
+    /** Como CONFIG en {@link SesionReceptor}. */
+    private void recibirMicConfig(Config c) throws ProtocoloException {
+        ColaBloques cola = colaMic;
+        if (cola == null) {
+            return;
+        }
+        if (c.bytesBloque() > cola.bytesPorBloque() || c.canales * c.muestrasPorBloque > Reproductor.MAX_MUESTRAS_BLOQUE) {
+            throw new ProtocoloException("micrófono con " + c.muestrasPorBloque + " muestras por bloque no soportado");
+        }
+        boolean mismoFormato = configMic != null && configMic.sampleRate == c.sampleRate
+                && configMic.canales == c.canales && configMic.muestrasPorBloque == c.muestrasPorBloque;
+        configMic = c;
+        if (mismoFormato) {
+            cola.actualizarConfig(c);
+        } else {
+            cola.nuevaGeneracion(c);
+        }
+    }
+
+    /** Como AUDIO en {@link SesionReceptor}: no asigna memoria. */
+    private void recibirMicAudio() throws IOException {
+        ColaBloques cola = colaMic;
+        if (lector.largo() < 4) {
+            throw new ProtocoloException("MIC_AUDIO sin seq");
+        }
+        long seq = lector.datos().readInt() & 0xFFFFFFFFL;
+        if (cola == null || configMic == null) {
+            return;
+        }
+        if (lector.largo() != configMic.largoAudio()) {
+            throw new ProtocoloException("MIC_AUDIO de " + lector.largo() + " bytes; con este MIC_CONFIG son "
+                    + configMic.largoAudio());
+        }
+        ColaBloques.Bloque b = cola.tomarLibre();
+        if (b == null) {
+            cola.recibido(seq); // la cola está llena: el reproductor está trabado; se descarta
+            return;
+        }
+        int bytes = configMic.bytesBloque();
+        lector.datos().readFully(b.datos, 0, bytes);
+        b.largo = bytes;
+        cola.encolar(b, seq);
     }
 
     /**

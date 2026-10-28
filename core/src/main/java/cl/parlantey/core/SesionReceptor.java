@@ -292,6 +292,11 @@ public final class SesionReceptor {
         }
     }
 
+    /** Para enviar el micrófono (MIC_*) por la misma conexión; es seguro para varios hilos. */
+    public EscritorTramas escritor() {
+        return escritor;
+    }
+
     /** "Detener receptor": BYE(0) al emisor. */
     public void despedir() throws IOException {
         escritor.bye(Protocolo.BYE_NORMAL);

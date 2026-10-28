@@ -1,6 +1,8 @@
 package cl.parlantey.pc;
 
+import cl.parlantey.core.CodificadorIma;
 import cl.parlantey.core.ColaBloques;
+import cl.parlantey.core.Config;
 import cl.parlantey.core.Hello;
 import cl.parlantey.core.Protocolo;
 import cl.parlantey.core.Reloj;
@@ -24,6 +26,8 @@ final class ReceptorDePrueba implements Transporte.Conector {
     volatile int conexiones;
     volatile int byeRecibido = -1;
     volatile boolean fallarConexion;
+    /** Como la app ParlanteY Mic: manda un tono de 440 Hz como micrófono (v4), a tiempo real. */
+    volatile boolean microfono;
     final List<String> tracks = new ArrayList<>();
     private volatile boolean fin;
     private Tuberia haciaReceptor;
@@ -107,6 +111,11 @@ final class ReceptorDePrueba implements Transporte.Conector {
         }, "receptor-state");
         state.setDaemon(true);
         state.start();
+        if (microfono) {
+            Thread mic = new Thread(() -> enviarMicrofono(sesion), "receptor-microfono");
+            mic.setDaemon(true);
+            mic.start();
+        }
         return new Transporte() {
             @Override
             public java.io.InputStream entrada() {
@@ -128,6 +137,33 @@ final class ReceptorDePrueba implements Transporte.Conector {
 
     @Override
     public void cancelar() {
+    }
+
+    /** Bloques de 16 ms a su ritmo, hasta que se corte la conexión. */
+    private static void enviarMicrofono(SesionReceptor sesion) {
+        int mpb = Protocolo.MUESTRAS_MIC;
+        CodificadorIma codificador = new CodificadorIma(1, mpb);
+        short[] pcm = new short[mpb];
+        byte[] bloque = new byte[codificador.bytesBloque()];
+        long msBloque = 1000L * mpb / Protocolo.TASA_MIC;
+        try {
+            sesion.escritor().micConfig(new Config(Protocolo.CODEC_IMA_ADPCM, Protocolo.TASA_MIC, 1, mpb,
+                    Protocolo.OBJETIVO_MIC_MS, true));
+            long inicio = System.currentTimeMillis();
+            for (long seq = 0; ; seq++) {
+                for (int i = 0; i < mpb; i++) {
+                    pcm[i] = (short) (8000 * Math.sin(2 * Math.PI * 440 * (seq * mpb + i) / Protocolo.TASA_MIC));
+                }
+                codificador.codificarBloque(pcm, 0, mpb, bloque, 0);
+                sesion.escritor().micAudio(seq, bloque, 0, bloque.length);
+                long espera = inicio + (seq + 1) * msBloque - System.currentTimeMillis();
+                if (espera > 0) {
+                    Thread.sleep(espera);
+                }
+            }
+        } catch (IOException | InterruptedException e) {
+            // conexión cortada
+        }
     }
 
     /** Se corta el enlace (como apagar el Bluetooth un momento). */

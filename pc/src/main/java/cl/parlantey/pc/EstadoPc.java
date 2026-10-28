@@ -54,6 +54,16 @@ public final class EstadoPc {
     public boolean silencio;
     public boolean silenciado;
 
+    /** El receptor manda su micrófono (app ParlanteY Mic). */
+    public boolean mic;
+    public boolean micSonando;
+    /** Lo que espera para sonar en el PC (cola + salida). */
+    public long micMs;
+    public long micCortes;
+    /** p. ej. falta VB-Cable. */
+    public String micError;
+    public String micDispositivo;
+
     public String error;
     public String aviso;
 
@@ -79,6 +89,12 @@ public final class EstadoPc {
         e.descartadosMs = descartadosMs;
         e.silencio = silencio;
         e.silenciado = silenciado;
+        e.mic = mic;
+        e.micSonando = micSonando;
+        e.micMs = micMs;
+        e.micCortes = micCortes;
+        e.micError = micError;
+        e.micDispositivo = micDispositivo;
         e.error = error;
         e.aviso = aviso;
         return e;

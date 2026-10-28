@@ -71,6 +71,25 @@ public class MensajesTest {
         assertArrayEquals(trama(Protocolo.AUDIO, 0x01, 0x02, 0x03, 0x04, 0xAA, 0xBB), bytes.toByteArray());
     }
 
+    /** v4: MIC_CONFIG y MIC_AUDIO llevan el payload de CONFIG y AUDIO con otro tipo. */
+    @Test
+    public void microfonoEnBytes() throws IOException {
+        escritor.micConfig(new Config(Protocolo.CODEC_IMA_ADPCM, Protocolo.TASA_MIC, 1, Protocolo.MUESTRAS_MIC,
+                Protocolo.OBJETIVO_MIC_MS, true));
+        byte[] esperado = trama(Protocolo.MIC_CONFIG,
+                0x01, // códec
+                0x00, 0x00, 0x3E, 0x80, // 16000
+                0x01, // canales
+                0x01, 0x00, // 256 muestras por bloque
+                0x00, 0x00, 0x00, 0x3C); // 60 ms
+        esperado[3] = Protocolo.FLAG_EN_VIVO;
+        assertArrayEquals(esperado, bytes.toByteArray());
+
+        bytes.reset();
+        escritor.micAudio(7, new byte[] {(byte) 0xAA, (byte) 0xBB}, 0, 2);
+        assertArrayEquals(trama(Protocolo.MIC_AUDIO, 0x00, 0x00, 0x00, 0x07, 0xAA, 0xBB), bytes.toByteArray());
+    }
+
     @Test
     public void trackEnBytes() throws IOException {
         escritor.track(new Track("Té", "A", 1000));

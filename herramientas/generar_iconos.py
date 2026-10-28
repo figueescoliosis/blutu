@@ -8,14 +8,16 @@ from PIL import Image, ImageDraw
 
 RAIZ = Path(__file__).resolve().parent.parent
 
-# Receptor: drawable-*, que entiende Android 2.3. Emisor: mipmap-*.
+# Receptor: drawable-*, que entiende Android 2.3 (el flavor mic, en verde). Emisor: mipmap-*.
 # ic_notificacion: ícono de la barra de estado, blanco sobre transparente (24 dp; en 2.3 ocupa
 # 24×24 px en mdpi). Va en drawable-* en las dos apps.
 DESTINOS = {
-    "receptor": ("drawable", (0xE6, 0x7E, 0x22),
-                 {"ldpi": 36, "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144}),
-    "emisor": ("mipmap", (0x29, 0x80, 0xB9),
-               {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}),
+    "receptor/src/main": ("drawable", (0xE6, 0x7E, 0x22),
+                          {"ldpi": 36, "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144}),
+    "receptor/src/mic": ("drawable", (0x27, 0xAE, 0x60),
+                         {"ldpi": 36, "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144}),
+    "emisor/src/main": ("mipmap", (0x29, 0x80, 0xB9),
+                        {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}),
 }
 
 
@@ -68,9 +70,9 @@ def main():
             carpeta.mkdir(parents=True, exist_ok=True)
             notificacion(lado).save(carpeta / "ic_notificacion.png", optimize=True)
             print(carpeta / "ic_notificacion.png", lado)
-    for modulo, (tipo, color, densidades) in DESTINOS.items():
+    for fuentes, (tipo, color, densidades) in DESTINOS.items():
         for densidad, lado in densidades.items():
-            carpeta = RAIZ / modulo / "src" / "main" / "res" / f"{tipo}-{densidad}"
+            carpeta = RAIZ / fuentes / "res" / f"{tipo}-{densidad}"
             carpeta.mkdir(parents=True, exist_ok=True)
             icono(lado, color).save(carpeta / "ic_launcher.png", optimize=True)
             print(carpeta / "ic_launcher.png", lado)

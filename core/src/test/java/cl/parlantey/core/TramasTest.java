@@ -47,7 +47,7 @@ public class TramasTest {
         escritor.hello(new Hello(Protocolo.VERSION, 10, "x", 2, 4000));
         byte[] esperado = {
                 0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0B, // cabecera, largo 11
-                0x03, // versión (v3)
+                0x04, // versión (v4)
                 0x00, 0x0A, // apiLevel
                 0x00, 0x01, 'x', // nombre UTF
                 0x02, // maxCanales
@@ -57,15 +57,15 @@ public class TramasTest {
 
     @Test
     public void helloDeOtraVersionSeRechazaLeyendoSoloElPrimerByte() throws IOException {
-        // Un HELLO "v4" con un formato que la v3 no entiende: solo importa el primer byte.
-        byte[] trama = {0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x04, (byte) 0xFF, (byte) 0xFF};
+        // Un HELLO "v5" con un formato que la v4 no entiende: solo importa el primer byte.
+        byte[] trama = {0x50, 0x59, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x05, (byte) 0xFF, (byte) 0xFF};
         LectorTramas l = lector(trama);
         assertEquals(Protocolo.HELLO, l.leer());
         try {
             Hello.leer(l.datos());
-            fail("debió rechazar la versión 4");
+            fail("debió rechazar la versión 5");
         } catch (VersionIncompatibleException e) {
-            assertEquals(4, e.versionRemota);
+            assertEquals(5, e.versionRemota);
             assertEquals("no debe leer más allá de la versión", 2, l.datos().available());
         }
     }

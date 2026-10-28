@@ -50,7 +50,7 @@
             android:label="@string/camara_app"
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
-            android:taskAffinity="cl.parlantey.receptor.camara">
+            android:taskAffinity="${applicationId}.camara">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

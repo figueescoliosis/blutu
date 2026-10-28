@@ -169,6 +169,62 @@ public class SesionTest {
     }
 
     @Test(timeout = 20000)
+    public void emisorRecibeElMicrofono() throws Exception {
+        final Config mic = new Config(Protocolo.CODEC_IMA_ADPCM, Protocolo.TASA_MIC, 1, Protocolo.MUESTRAS_MIC,
+                Protocolo.OBJETIVO_MIC_MS, true);
+        final byte[] enviado = new byte[mic.bytesBloque()];
+        short[] pcm = new short[Protocolo.MUESTRAS_MIC];
+        for (int i = 0; i < pcm.length; i++) {
+            pcm[i] = (short) (8000 * Math.sin(2 * Math.PI * 440 * i / Protocolo.TASA_MIC));
+        }
+        new CodificadorIma(1, Protocolo.MUESTRAS_MIC).codificarBloque(pcm, 0, pcm.length, enviado, 0);
+        arrancarReceptor(s -> {
+            EscritorTramas e = new EscritorTramas(s.getOutputStream());
+            LectorTramas l = new LectorTramas(s.getInputStream());
+            e.hello(HELLO);
+            e.micConfig(mic);
+            for (int seq = 0; seq < 3; seq++) {
+                e.micAudio(seq, enviado, 0, enviado.length);
+            }
+            assertEquals(Protocolo.PING, l.leer());
+            e.pong(l.datos().readLong()); // llega después del micrófono: sirve de sincronización
+            assertEquals(Protocolo.SEQ_NINGUNO, e.ultimoSeqAudio()); // MIC_AUDIO no cuenta como AUDIO
+            return null;
+        });
+        ColaBloques cola = new ColaBloques(8, mic.bytesBloque());
+        SesionEmisor sesion = conectar();
+        sesion.recibirMicrofono(cola);
+        sesion.esperarHello();
+        assertTrue(sesion.ping() > 0);
+        assertNull(esperarReceptor());
+
+        assertEquals(mic, cola.config());
+        assertEquals(3, cola.enCola());
+        assertEquals(2, cola.ultimoSeq());
+        ColaBloques.Bloque b = cola.sacar(cola.generacion());
+        assertEquals(enviado.length, b.largo);
+        assertTrue(java.util.Arrays.equals(enviado, java.util.Arrays.copyOf(b.datos, b.largo)));
+    }
+
+    @Test(timeout = 20000)
+    public void emisorSinColaDescartaElMicrofono() throws Exception {
+        arrancarReceptor(s -> {
+            EscritorTramas e = new EscritorTramas(s.getOutputStream());
+            LectorTramas l = new LectorTramas(s.getInputStream());
+            e.hello(HELLO);
+            e.micConfig(Config.imaAdpcm(Protocolo.TASA_MIC, 1, Protocolo.OBJETIVO_MIC_MS, true));
+            e.micAudio(0, new byte[4 + 512], 0, 516);
+            assertEquals(Protocolo.PING, l.leer());
+            e.pong(l.datos().readLong());
+            return null;
+        });
+        SesionEmisor sesion = conectar();
+        sesion.esperarHello();
+        assertTrue(sesion.ping() > 0); // la sesión sigue viva
+        assertNull(esperarReceptor());
+    }
+
+    @Test(timeout = 20000)
     public void versionDistintaTerminaConBye() throws Exception {
         arrancarReceptor(s -> {
             EscritorTramas e = new EscritorTramas(s.getOutputStream());

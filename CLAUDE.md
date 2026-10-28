@@ -37,12 +37,13 @@ parlantey/
 Un solo build Gradle multi-módulo. Paquetes: `cl.parlantey.core`, `cl.parlantey.receptor`, `cl.parlantey.emisor`, `cl.parlantey.pc`.
 - `pc` (agregado a pedido del usuario): manda al Galaxy Y lo que suena en el PC (WASAPI loopback) por Bluetooth (Winsock `AF_BTH`), con el mismo protocolo y el mismo `FlujoEmisor`/`ControlCola` en vivo. Se empaqueta como `ParlanteY.exe` (jpackage, con su propio Java) en el job de Windows del workflow de release.
 - Cámara web (agregada a pedido del usuario, receptor 0.5.0): `CamaraActivity`, segundo ícono del APK del receptor. Cámara trasera → JPEG → MJPEG por HTTP (Wi-Fi, puerto 8080); en el PC, OBS la toma y la publica como «OBS Virtual Camera». Mismas reglas del receptor. Detalles y pasos de OBS en `NOTAS.md`.
+- Micrófono (agregado a pedido del usuario, protocolo v4, receptor 0.6.0): app aparte **ParlanteY Mic** = flavor `mic` del receptor (`cl.parlantey.receptor.mic`, se instala junto a la normal; el flavor `normal` es la app de siempre). Mismas fuentes: `BuildConfig.MICROFONO` arranca `HiloMicrofono` en cada conexión (AudioRecord 16 kHz mono → ADPCM en bloques de 256 → MIC_CONFIG/MIC_AUDIO). El PC lo suena con `MicrofonoPc` (`ColaBloques` + `Reproductor` en vivo) en «CABLE Input» de VB-Audio Virtual Cable (`SalidaWasapi`); las apps de Windows usan «CABLE Output» como micrófono. Nunca a la salida predeterminada: el PC la captura y volvería al Galaxy Y. Solo una de las dos apps del receptor abierta a la vez (publican el mismo servicio RFCOMM).
 
 ## Reglas duras
 
 ### core y receptor (corren en Android 2.3)
 - Java con nivel de lenguaje 8 (D8 desazucara las lambdas). Sin Kotlin, sin AndroidX, sin librerías externas, sin NDK.
-- Con AGP 9+: desactivar el Kotlin integrado en estos dos módulos (no tienen fuentes Kotlin). La app no debe traer kotlin-stdlib ni AndroidX: `./gradlew :receptor:dependencies --configuration debugRuntimeClasspath` (y `releaseRuntimeClasspath`) debe mostrar solo `project ':core'`, y `./gradlew :receptor:verificarApk` debe pasar (comprueba que el dex no referencia `Lkotlin/` ni `Landroidx/`). El informe completo de `:receptor:dependencies` siempre nombra kotlin-stdlib en configuraciones de herramientas de AGP (`androidLintTool`, `kotlin*Classpath`, `unified-test-platform…`); eso no cuenta.
+- Con AGP 9+: desactivar el Kotlin integrado en estos dos módulos (no tienen fuentes Kotlin). La app no debe traer kotlin-stdlib ni AndroidX: `./gradlew :receptor:dependencies --configuration normalDebugRuntimeClasspath` (y `micDebugRuntimeClasspath`, `normalReleaseRuntimeClasspath`, `micReleaseRuntimeClasspath`) debe mostrar solo `project ':core'`, y `./gradlew :receptor:verificarApk` (verifica las dos APK) debe pasar (comprueba que el dex no referencia `Lkotlin/` ni `Landroidx/`). El informe completo de `:receptor:dependencies` siempre nombra kotlin-stdlib en configuraciones de herramientas de AGP (`androidLintTool`, `kotlin*Classpath`, `unified-test-platform…`); eso no cuenta.
 - minSdk 9. Lint `NewApi` e `InlinedApi` como error. APIs superiores a 9 solo con guarda `Build.VERSION.SDK_INT` (ej.: sockets RFCOMM insecure, API 10).
 - No usar: `java.util.function`, streams, `java.util.Objects`, `StandardCharsets`, `java.time`, `Notification.Builder` (API 11), `BluetoothSocket.isConnected()` (API 14), MediaCodec (API 16).
 - Notificación del servicio: `new Notification()` llenando los campos públicos `icon`, `tickerText`, `when`, `contentView` (RemoteViews con layout propio) y `contentIntent`. `setLatestEventInfo` ya no existe en el SDK actual.
@@ -148,7 +149,7 @@ Agregar en el receptor compensación de deriva de reloj: si `bufferMs` se aleja 
 
 ## Instalación en el Galaxy Y
 - Ajustes → Aplicaciones → activar **Orígenes desconocidos**.
-- `adb install -r receptor/build/outputs/apk/debug/receptor-debug.apk` (en Windows requiere el driver USB de Samsung). Alternativa: copiar el APK a la microSD y abrirlo desde un gestor de archivos.
+- `adb install -r receptor/build/outputs/apk/normal/debug/receptor-normal-debug.apk` (app Mic: `apk/mic/debug/receptor-mic-debug.apk`) (en Windows requiere el driver USB de Samsung). Alternativa: copiar el APK a la microSD y abrirlo desde un gestor de archivos.
 - Vincular: en el receptor tocar **Hacer visible** → en el emisor, Ajustes → Bluetooth → vincular.
 
 ## Fuera de alcance

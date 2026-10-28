@@ -33,7 +33,7 @@ jobs:
       - name: Tests, lint, compilación y verificación del receptor; programa para PC
         run: >-
           ./gradlew --no-daemon
-          :core:testDebugUnitTest :core:lintDebug :receptor:lintDebug :emisor:lintDebug
+          :core:testDebugUnitTest :core:lintDebug :receptor:lintNormalDebug :receptor:lintMicDebug :emisor:lintDebug
           :receptor:assembleDebug :emisor:assembleDebug :receptor:verificarApk
           :pc:test :pc:installDist
 
@@ -43,7 +43,8 @@ jobs:
         run: |
           version="${TAG#v}"
           mkdir -p salida
-          cp receptor/build/outputs/apk/debug/receptor-debug.apk "salida/ParlanteY-receptor-$version.apk"
+          cp receptor/build/outputs/apk/normal/debug/receptor-normal-debug.apk "salida/ParlanteY-receptor-$version.apk"
+          cp receptor/build/outputs/apk/mic/debug/receptor-mic-debug.apk "salida/ParlanteY-receptor-mic-$version.apk"
           cp emisor/build/outputs/apk/debug/emisor-debug.apk "salida/ParlanteY-emisor-$version.apk"
 
       - uses: actions/upload-artifact@v4
@@ -126,6 +127,7 @@ jobs:
           | Archivo | Dónde |
           |---|---|
           | \`ParlanteY-receptor-$version.apk\` | Samsung Galaxy Y (Android 2.3, minSdk 9, firma v1) |
+          | \`ParlanteY-receptor-mic-$version.apk\` | Galaxy Y, otra app («ParlanteY Mic»): además manda el micrófono del audífono al PC (requiere VB-Audio Virtual Cable en el PC) |
           | \`ParlanteY-emisor-$version.apk\` | teléfono moderno (Android 8 o superior) |
           | \`ParlanteY-PC-$version.zip\` | PC con Windows 10/11 de 64 bits y Bluetooth |
 

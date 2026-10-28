@@ -14,9 +14,9 @@ public final class Protocolo {
 
     /**
      * Versión del protocolo; viaja como primer byte del payload de HELLO. v2: CONTROL FIN. v3: CONFIG
-     * en vivo ({@link #FLAG_EN_VIVO}).
+     * en vivo ({@link #FLAG_EN_VIVO}). v4: micrófono del receptor ({@link #MIC_CONFIG}, {@link #MIC_AUDIO}).
      */
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
 
     /** UUID v4 del servicio RFCOMM. Generado una sola vez: no cambiar. */
     public static final UUID UUID_SERVICIO = UUID.fromString("c9cc3858-c5e1-46a3-9f9c-f1e94f108feb");
@@ -45,6 +45,10 @@ public final class Protocolo {
     public static final int TEST_DATA = 0x09;
     public static final int TEST_RESULT = 0x0A;
     public static final int BYE = 0x0B;
+    /** v4, R→E: el receptor va a enviar su micrófono. Payload como CONFIG. */
+    public static final int MIC_CONFIG = 0x0C;
+    /** v4, R→E: un bloque del micrófono. Payload como AUDIO. */
+    public static final int MIC_AUDIO = 0x0D;
 
     /** Bit 0 de {@code flags} en TEST_DATA: última trama de la prueba. */
     public static final int FLAG_ULTIMA = 0x01;
@@ -78,6 +82,13 @@ public final class Protocolo {
     public static final int TASA_MAX = 48000;
 
     public static final int MAX_CANALES = 2;
+
+    // Micrófono (v4): voz en vivo, bloques cortos para bajar la latencia.
+    public static final int TASA_MIC = 16000;
+    /** 16 ms a 16 kHz. */
+    public static final int MUESTRAS_MIC = 256;
+    /** Colchón del lado que reproduce el micrófono. */
+    public static final long OBJETIVO_MIC_MS = 60;
 
     /** ultimoSeq de STATE antes de recibir el primer AUDIO (equivale a −1 en u32). */
     public static final long SEQ_NINGUNO = 0xFFFFFFFFL;

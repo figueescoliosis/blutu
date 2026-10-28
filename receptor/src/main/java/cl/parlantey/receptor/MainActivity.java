@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.View;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -44,6 +45,10 @@ public class MainActivity extends Activity {
     private TextView diagnostico;
     private TextView prueba;
     private TextView esteTelefono;
+    /** Solo en la app Mic. */
+    private TextView mic;
+    private Button botonMic;
+    private AudioManager audio;
 
     /** Mensaje de la actividad (visibilidad, Bluetooth rechazado); tapa al del servicio. */
     private String eventoLocal = "";
@@ -74,6 +79,7 @@ public class MainActivity extends Activity {
     private long vDiagnostico = -1;
     private String vPrueba;
     private String vNombre;
+    private int vMic = -1;
 
     private final Runnable refresco = new Runnable() {
         @Override
@@ -103,6 +109,18 @@ public class MainActivity extends Activity {
         etiquetaCortes = getString(R.string.buffer_cortes);
         ((TextView) findViewById(R.id.version)).setText(
                 getString(R.string.version, BuildConfig.VERSION_NAME, Protocolo.VERSION));
+
+        if (BuildConfig.MICROFONO) {
+            findViewById(R.id.fila_mic).setVisibility(View.VISIBLE);
+            mic = (TextView) findViewById(R.id.mic);
+            botonMic = (Button) findViewById(R.id.boton_mic);
+            audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+            botonMic.setOnClickListener(v -> {
+                HiloMicrofono.enviar = !HiloMicrofono.enviar;
+                vMic = -1;
+                refrescar();
+            });
+        }
 
         Button visible = (Button) findViewById(R.id.boton_visible);
         Button detener = (Button) findViewById(R.id.boton_detener);
@@ -273,11 +291,36 @@ public class MainActivity extends Activity {
             prueba.setText(pr.length() == 0 ? getString(R.string.prueba_ninguna) : pr);
         }
 
+        if (BuildConfig.MICROFONO) {
+            refrescarMic();
+        }
+
         String nombre = s.nombreLocal;
         if (!nombre.equals(vNombre)) {
             vNombre = nombre;
             esteTelefono.setText(getString(R.string.este_telefono, nombre));
         }
+    }
+
+    /** «Mic (audífono): enviando · nivel 40 %»; el nivel, de a 10 %. */
+    @SuppressWarnings("deprecation") // isWiredHeadsetOn: la única vía en 2.3
+    private void refrescarMic() {
+        boolean audifono = audio.isWiredHeadsetOn();
+        boolean enviar = HiloMicrofono.enviar;
+        int est = HiloMicrofono.estado;
+        int nivel = HiloMicrofono.pico * 10 / 32768 * 10;
+        int clave = (audifono ? 1 : 0) | (enviar ? 2 : 0) | est << 2 | nivel << 4;
+        if (clave == vMic) {
+            return;
+        }
+        vMic = clave;
+        int texto = !enviar ? R.string.mic_apagado
+                : est == HiloMicrofono.ENVIANDO ? R.string.mic_enviando
+                : est == HiloMicrofono.ERROR ? R.string.mic_error
+                : R.string.mic_esperando;
+        mic.setText(getString(R.string.mic, getString(audifono ? R.string.mic_audifono : R.string.mic_telefono),
+                getString(texto), nivel));
+        botonMic.setText(enviar ? R.string.boton_mic_on : R.string.boton_mic_off);
     }
 
     private String textoEstado(int est, String emisor, int estRep, boolean sonando, boolean pausado,

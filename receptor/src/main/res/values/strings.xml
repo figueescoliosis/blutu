@@ -49,6 +49,16 @@
     <string name="notificacion_toca">Toca para abrir</string>
     <string name="ayuda">Para vincular: Hacer visible y, en el emisor, Ajustes → Bluetooth → vincular. Sigue sonando con la pantalla apagada.</string>
 
+    <!-- App Mic. -->
+    <string name="mic">Mic (%1$s): %2$s · nivel %3$d %%</string>
+    <string name="mic_audifono">audífono</string>
+    <string name="mic_telefono">teléfono</string>
+    <string name="mic_esperando">sin conexión</string>
+    <string name="mic_enviando">enviando</string>
+    <string name="mic_apagado">apagado</string>
+    <string name="mic_error">no se pudo abrir</string>
+    <string name="boton_mic_on">Mic ON</string>
+    <string name="boton_mic_off">Mic OFF</string>
     <string name="camara_app">ParlanteY Cámara</string>
     <string name="camara_direccion">http://%1$s:%2$d/</string>
     <string name="camara_sin_wifi">Conecta el Wi-Fi</string>

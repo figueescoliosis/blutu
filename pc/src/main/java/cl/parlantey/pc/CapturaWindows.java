@@ -29,17 +29,17 @@ import java.util.concurrent.TimeUnit;
  */
 final class CapturaWindows implements FuenteSistema {
 
-    private static final Guid.CLSID CLSID_MMDeviceEnumerator = new Guid.CLSID("{BCDE0395-E52F-467C-8E3D-C4579291692E}");
-    private static final Guid.IID IID_IMMDeviceEnumerator = new Guid.IID("{A95664D2-9614-4F35-A746-DE8DB63617E6}");
-    private static final Guid.IID IID_IAudioClient = new Guid.IID("{1CB9AD4C-DBFA-4C32-B178-C2F568A703B2}");
+    static final Guid.CLSID CLSID_MMDeviceEnumerator = new Guid.CLSID("{BCDE0395-E52F-467C-8E3D-C4579291692E}");
+    static final Guid.IID IID_IMMDeviceEnumerator = new Guid.IID("{A95664D2-9614-4F35-A746-DE8DB63617E6}");
+    static final Guid.IID IID_IAudioClient = new Guid.IID("{1CB9AD4C-DBFA-4C32-B178-C2F568A703B2}");
     private static final Guid.IID IID_IAudioCaptureClient = new Guid.IID("{C8ADBD64-E71E-48A0-A4DE-185C395CD317}");
-    private static final Guid.IID IID_IAudioRenderClient = new Guid.IID("{F294ACFC-3146-4483-A7BF-ADDCA7C260E2}");
+    static final Guid.IID IID_IAudioRenderClient = new Guid.IID("{F294ACFC-3146-4483-A7BF-ADDCA7C260E2}");
     private static final Guid.IID IID_IAudioEndpointVolume = new Guid.IID("{5CDF2C82-841E-4546-9722-0CF74078229A}");
-    private static final int CLSCTX_ALL = 0x17;
-    private static final int COINIT_MULTITHREADED = 0;
-    private static final int E_RENDER = 0;
+    static final int CLSCTX_ALL = 0x17;
+    static final int COINIT_MULTITHREADED = 0;
+    static final int E_RENDER = 0;
     private static final int E_CONSOLE = 0;
-    private static final int AUDCLNT_SHAREMODE_SHARED = 0;
+    static final int AUDCLNT_SHAREMODE_SHARED = 0;
     private static final int AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000;
     private static final int AUDCLNT_BUFFERFLAGS_SILENT = 0x2;
     private static final long BUFFER_100NS = 2000000L; // 200 ms
@@ -47,23 +47,23 @@ final class CapturaWindows implements FuenteSistema {
     private static final int WAVE_FORMAT_EXTENSIBLE = 0xFFFE;
 
     // Índices en las tablas de métodos (después de los 3 de IUnknown).
-    private static final int RELEASE = 2;
+    static final int RELEASE = 2;
     private static final int ENUM_GET_DEFAULT_AUDIO_ENDPOINT = 4;
     private static final int ENUM_GET_DEVICE = 5;
-    private static final int DEVICE_ACTIVATE = 3;
+    static final int DEVICE_ACTIVATE = 3;
     private static final int DEVICE_GET_ID = 5;
-    private static final int CLIENT_INITIALIZE = 3;
-    private static final int CLIENT_GET_BUFFER_SIZE = 4;
-    private static final int CLIENT_GET_CURRENT_PADDING = 6;
+    static final int CLIENT_INITIALIZE = 3;
+    static final int CLIENT_GET_BUFFER_SIZE = 4;
+    static final int CLIENT_GET_CURRENT_PADDING = 6;
     private static final int CLIENT_GET_MIX_FORMAT = 8;
-    private static final int CLIENT_START = 10;
-    private static final int CLIENT_STOP = 11;
-    private static final int CLIENT_GET_SERVICE = 14;
+    static final int CLIENT_START = 10;
+    static final int CLIENT_STOP = 11;
+    static final int CLIENT_GET_SERVICE = 14;
     private static final int CAPTURE_GET_BUFFER = 3;
     private static final int CAPTURE_RELEASE_BUFFER = 4;
     private static final int CAPTURE_GET_NEXT_PACKET_SIZE = 5;
-    private static final int RENDER_GET_BUFFER = 3;
-    private static final int RENDER_RELEASE_BUFFER = 4;
+    static final int RENDER_GET_BUFFER = 3;
+    static final int RENDER_RELEASE_BUFFER = 4;
     private static final int VOLUME_SET_MUTE = 14;
     private static final int VOLUME_GET_MUTE = 15;
 
@@ -507,17 +507,17 @@ final class CapturaWindows implements FuenteSistema {
         return f.invokeInt(a);
     }
 
-    private static void soltar(Pointer obj) {
+    static void soltar(Pointer obj) {
         if (obj != null) {
             llamar(obj, RELEASE);
         }
     }
 
-    private static void verificar(WinNT.HRESULT hr, String que) throws IOException {
+    static void verificar(WinNT.HRESULT hr, String que) throws IOException {
         verificar(hr.intValue(), que);
     }
 
-    private static void verificar(int hr, String que) throws IOException {
+    static void verificar(int hr, String que) throws IOException {
         if (hr < 0) {
             throw new IOException(que + " (0x" + Integer.toHexString(hr) + ")");
         }

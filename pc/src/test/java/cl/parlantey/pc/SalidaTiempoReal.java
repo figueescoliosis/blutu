@@ -4,7 +4,7 @@ import cl.parlantey.core.Salida;
 
 /** Salida falsa que consume a tiempo real (reloj del sistema). Cuenta las faltas de datos. */
 final class SalidaTiempoReal implements Salida {
-    private final int capacidad = 8192;
+    private final int capacidad;
     private int tasa;
     private long escritos;
     private long base;
@@ -13,6 +13,14 @@ final class SalidaTiempoReal implements Salida {
     volatile long framesSonados;
     volatile int faltas;
     volatile boolean abierta;
+
+    SalidaTiempoReal() {
+        this(8192);
+    }
+
+    SalidaTiempoReal(int capacidad) {
+        this.capacidad = capacidad;
+    }
 
     @Override
     public synchronized boolean abrir(int tasa, int canales) {

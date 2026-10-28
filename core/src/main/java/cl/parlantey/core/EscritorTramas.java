@@ -39,6 +39,23 @@ public final class EscritorTramas {
      * bloque al buffer de la trama: no asigna memoria.
      */
     public synchronized void audio(long seq, byte[] bloque, int desde, int largo) throws IOException {
+        bloque(Protocolo.AUDIO, seq, bloque, desde, largo);
+        ultimoSeqAudio = seq;
+    }
+
+    /** MIC_CONFIG (v4, R→E): el mismo payload que CONFIG. */
+    public synchronized void micConfig(Config config) throws IOException {
+        empezar();
+        config.escribir(datos);
+        enviar(Protocolo.MIC_CONFIG, config.flags());
+    }
+
+    /** MIC_AUDIO (v4, R→E): como {@link #audio}, sin tocar {@link #ultimoSeqAudio}. */
+    public synchronized void micAudio(long seq, byte[] bloque, int desde, int largo) throws IOException {
+        bloque(Protocolo.MIC_AUDIO, seq, bloque, desde, largo);
+    }
+
+    private void bloque(int tipo, long seq, byte[] bloque, int desde, int largo) throws IOException {
         Rangos.u32(seq, "seq");
         if (largo < 0 || largo > Protocolo.MAX_PAYLOAD - 4) {
             throw new IllegalArgumentException("largo de bloque fuera de rango: " + largo);
@@ -46,8 +63,7 @@ public final class EscritorTramas {
         empezar();
         datos.writeInt((int) seq);
         trama.write(bloque, desde, largo);
-        enviar(Protocolo.AUDIO, 0);
-        ultimoSeqAudio = seq;
+        enviar(tipo, 0);
     }
 
     /**

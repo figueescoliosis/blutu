@@ -54,6 +54,8 @@ public final class SupervisorPc {
     private final Ajustes ajustes;
     private final Consumer<EstadoPc> oyente;
     private final Dispositivo dispositivo;
+    /** El micrófono del Galaxy Y (app ParlanteY Mic), en «CABLE Input». */
+    private final MicrofonoPc microfono;
     private final Object monitor = new Object();
     private final Thread hiloEnlace;
     private final Thread hiloVigia;
@@ -136,6 +138,12 @@ public final class SupervisorPc {
 
     public SupervisorPc(Transporte.Conector conector, FuenteSistema fuente, Ajustes ajustes, Dispositivo dispositivo,
             EstadoPc.Opcion opcion, boolean silenciar, Consumer<EstadoPc> oyente) {
+        this(conector, fuente, ajustes, dispositivo, opcion, silenciar, oyente, new MicrofonoPc());
+    }
+
+    SupervisorPc(Transporte.Conector conector, FuenteSistema fuente, Ajustes ajustes, Dispositivo dispositivo,
+            EstadoPc.Opcion opcion, boolean silenciar, Consumer<EstadoPc> oyente, MicrofonoPc microfono) {
+        this.microfono = microfono;
         this.conector = conector;
         this.fuente = fuente;
         this.ajustes = ajustes;
@@ -229,6 +237,7 @@ public final class SupervisorPc {
     private void ejecutar() {
         int intento = 0;
         boolean huboHello = false;
+        microfono.iniciar();
         try {
             while (!detenido) {
                 estado.enlace = huboHello ? EstadoPc.Enlace.RECONECTANDO : EstadoPc.Enlace.CONECTANDO;
@@ -244,6 +253,7 @@ public final class SupervisorPc {
                     }
                     plazo(TIEMPO_HELLO_MS);
                     SesionEmisor s = new SesionEmisor(t.entrada(), t.salida());
+                    s.recibirMicrofono(microfono.cola());
                     Hello hello = s.esperarHello();
                     plazo(0);
                     sesion = s;
@@ -265,6 +275,7 @@ public final class SupervisorPc {
                         s.cerrar();
                     }
                     control.desconectar(); // la captura sigue; al reconectar se envía lo más reciente
+                    microfono.finConexion();
                 }
                 if (detenido || falla == null) {
                     break;
@@ -286,6 +297,8 @@ public final class SupervisorPc {
         } finally {
             terminarEnvio(null);
             fuente.detener();
+            microfono.detener();
+            estado.mic = false;
             estado.enlace = EstadoPc.Enlace.INACTIVO;
             estado.silenciado = false;
             publicar();
@@ -553,7 +566,17 @@ public final class SupervisorPc {
             actualizarResumen(e);
         }
         estado.silenciado = fuente.silenciado();
+        estadoMicrofono();
         publicar();
+    }
+
+    private void estadoMicrofono() {
+        estado.mic = microfono.cola().config() != null; // el receptor manda micrófono
+        estado.micSonando = microfono.reproductor().reproduciendo();
+        estado.micMs = microfono.reproductor().bufferMs();
+        estado.micCortes = microfono.reproductor().cortes();
+        estado.micError = microfono.error();
+        estado.micDispositivo = microfono.dispositivo();
     }
 
     private synchronized void actualizarResumen(Estado e) {

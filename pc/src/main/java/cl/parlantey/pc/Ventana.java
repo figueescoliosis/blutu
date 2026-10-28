@@ -51,6 +51,8 @@ final class Ventana {
     private final JLabel vivo = new JLabel(" ");
     private final JLabel formato = new JLabel(" ");
     private final JLabel aviso = new JLabel(" ");
+    /** Micrófono del Galaxy Y (app ParlanteY Mic). */
+    private final JLabel mic = new JLabel(" ");
     private final JButton probar = new JButton("Probar enlace (≈ 6 s)");
     private final JButton copiar = new JButton("Copiar para NOTAS");
 
@@ -127,6 +129,7 @@ final class Ventana {
         vivo.setFont(vivo.getFont().deriveFont(Font.BOLD, 14f));
         agregar(p, vivo);
         agregar(p, formato);
+        agregar(p, mic);
         agregar(p, aviso);
         p.add(Box.createVerticalStrut(10));
         JPanel botones = new JPanel();
@@ -284,6 +287,7 @@ final class Ventana {
             vivo.setText(" ");
             formato.setText(" ");
         }
+        mostrarMicrofono(e);
         if (e.error != null) {
             aviso(e.error, true);
         } else if (e.aviso != null) {
@@ -292,6 +296,18 @@ final class Ventana {
             aviso("Llega solo silencio: pon algo a sonar en el PC.", false);
         } else if (conectado) {
             aviso(" ", false);
+        }
+    }
+
+    private void mostrarMicrofono(EstadoPc e) {
+        if (!e.mic) {
+            mic.setText(" ");
+        } else if (e.micError != null && e.micDispositivo == null) {
+            mic.setText("<html>Micrófono del Galaxy Y: <font color='#B00020'>" + e.micError + "</font></html>");
+        } else {
+            mic.setText("<html>Micrófono del Galaxy Y → <b>" + (e.micDispositivo != null ? e.micDispositivo : "…")
+                    + "</b> · " + (e.micSonando ? "≈ " + e.micMs + " ms" : "esperando") + " · " + e.micCortes
+                    + " cortes<br><small>En Discord/OBS/Zoom elige «CABLE Output» como micrófono.</small></html>");
         }
     }
 

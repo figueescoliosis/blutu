@@ -3,7 +3,7 @@ plugins {
     application
 }
 
-version = "0.5.0"
+version = "0.6.0"
 
 // Emisor para Windows (PC): Java 21 + JNA. Compila las fuentes del core directamente (el core es una
 // biblioteca de Android, pero su código es Java puro): una sola implementación del protocolo.

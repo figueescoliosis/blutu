@@ -34,10 +34,36 @@ public class SupervisorPcTest {
         nodo.removeNode();
     }
 
+    /** Como «CABLE Input»: 30 ms de buffer a 16 kHz. */
+    private final SalidaTiempoReal cable = new SalidaTiempoReal(480);
+
     private SupervisorPc nuevo(boolean silenciar) {
-        sup = new SupervisorPc(receptor, fuente, ajustes, galaxy, EstadoPc.Opcion.AUTO, silenciar, e -> ultimo = e);
+        sup = new SupervisorPc(receptor, fuente, ajustes, galaxy, EstadoPc.Opcion.AUTO, silenciar, e -> ultimo = e,
+                new MicrofonoPc(cable));
         sup.iniciar();
         return sup;
+    }
+
+    /** App ParlanteY Mic (v4): su micrófono suena en el PC con poca latencia, también mientras el PC envía. */
+    @Test
+    public void microfonoDelReceptorSuenaEnElPc() throws Exception {
+        ajustes.kBps(galaxy.direccion, 165);
+        receptor.microfono = true;
+        nuevo(false);
+        esperarQue("conectado", () -> ultimo.enlace == EstadoPc.Enlace.CONECTADO, 5000);
+        sup.enviar(true);
+        esperarQue("micrófono sonando", () -> ultimo.mic && ultimo.micSonando, 5000);
+        long antes = cable.framesSonados;
+        Thread.sleep(3000);
+        assertTrue("sonaron " + (cable.framesSonados - antes), cable.framesSonados - antes > 2 * Protocolo.TASA_MIC);
+        assertEquals("sin cortes", 0, ultimo.micCortes);
+        assertTrue("latencia del micrófono " + ultimo.micMs, ultimo.micMs > 0 && ultimo.micMs <= 150);
+        assertEquals(0, receptor.reproductor.cortes()); // la música hacia el Galaxy Y sigue sin cortes
+
+        // Al reconectar, el micrófono vuelve solo.
+        receptor.cortar();
+        esperarQue("reconectado", () -> receptor.conexiones >= 2 && ultimo.enlace == EstadoPc.Enlace.CONECTADO, 15000);
+        esperarQue("micrófono de nuevo", () -> ultimo.mic && ultimo.micSonando, 5000);
     }
 
     private static void esperarQue(String que, BooleanSupplier c, long ms) throws InterruptedException {

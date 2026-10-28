@@ -565,3 +565,31 @@ Pedido del usuario: usar el Galaxy Y como cámara web del PC. Elegido: Wi-Fi + O
 **0.5.7 (fluidez):** calidad 50 (≈ 7 KB/cuadro) y `setPreviewFrameRate(30)`. [PENDIENTE medir]
 **Medido con 0.5.7:** 7,8 fps parejos (intervalo 127 ms, peor 132), 5,1 KB/cuadro, 40 KB/s, ping 73–112 ms → fluido; limita la exposición de la cámara. El driver dejó `preview-frame-rate=15` pese a `setPreviewFrameRate(30)`.
 **0.5.8:** después de configurar, prueba por separado `iso=ISO400`, `preview-fps-range=30000,30000` y `preview-frame-rate=30` (cada uno con su `setParameters`; si el driver lo rechaza, sigue lo anterior). [PENDIENTE medir]
+
+## Micrófono del Galaxy Y → PC — ParlanteY Mic (receptor 0.6.0, protocolo v4, 2026-10-28)
+
+App aparte («ParlanteY Mic», `cl.parlantey.receptor.mic`, ícono verde) que además manda el micrófono (el del audífono si es de 4 polos) al PC. En el PC suena en «CABLE Input» de **VB-Audio Virtual Cable** (https://vb-audio.com/Cable/, gratis, se instala una vez); Discord, OBS o Zoom eligen «CABLE Output» como micrófono. Detalles del formato en `PROTOCOLO.md` (0x0C/0x0D).
+
+**Pasos:** instalar VB-Cable en el PC y reiniciar → instalar `ParlanteY-receptor-mic` en el Galaxy Y (junto a la normal; abrir solo una de las dos) → conectar desde ParlanteY PC como siempre. En el Galaxy Y la fila «Mic» muestra audífono/teléfono, estado y nivel, y el botón Mic ON/OFF; en el PC, la línea «Micrófono del Galaxy Y → CABLE Input · ≈ N ms · cortes».
+
+### Verificación sin dispositivo (Windows 10, este PC, 2026-10-28)
+
+- `:core:testDebugUnitTest`: todo pasa. Nuevos: `MensajesTest.microfonoEnBytes` (MIC_CONFIG y MIC_AUDIO byte a byte), `SesionTest.emisorRecibeElMicrofono` (llegan a la cola, MIC_AUDIO no toca `ultimoSeqAudio`) y `emisorSinColaDescartaElMicrofono`. Los HELLO byte a byte ahora llevan la versión 4.
+- `:pc:test`: 15 tests, 0 fallas. Nuevo `SupervisorPcTest.microfonoDelReceptorSuenaEnElPc`: el receptor de prueba manda un tono como micrófono a tiempo real mientras el PC envía música. Con una salida de 30 ms (como CABLE Input) suena sin cortes, la latencia en el PC es ≤ 150 ms, la música no tiene cortes y el micrófono vuelve solo tras reconectar.
+- `:receptor:lintNormalDebug :receptor:lintMicDebug`: 0 errores. `:receptor:verificarApk` verifica las dos APK (firma v1, minSdk 9, dex 035, sin Kotlin ni AndroidX). La Mic declara `RECORD_AUDIO` y la normal no.
+- **WASAPI real en este PC** (sin VB-Cable instalado, así que contra «Altavoces (High Definition Audio Device)» y escribiendo solo silencio):
+  - `SalidaWasapi` encuentra el dispositivo por nombre. Windows acepta 16 kHz mono PCM16 con AUTOCONVERTPCM, el buffer queda en 480 frames (30 ms), en 2 s consume 32 000 frames exactos y Reset deja la posición en 0. Sin VB-Cable el error es «no está «CABLE Input»: instala VB-Audio Virtual Cable».
+  - `MicrofonoPc` completo durante 10 s con bloques a 16 ms: **0 cortes**, 0 subcortes, 0 errores, escrituras cada ≤ 14 ms. **Colchón en el PC: 88–102 ms (prom. 94)**.
+  - La prueba encontró un bug, ya corregido: `Guid.GUID.toByteArray()` de JNA da los bytes en el orden del texto, y la PROPERTYKEY de COM necesita el de memoria (no se encontraba ningún dispositivo).
+- Latencia esperada de punta a punta ≈ AudioRecord (20–40 ms) + bloque 16 ms + RFCOMM ≈ 10 ms + colchón ≈ 94 ms + VB-Cable ≈ **140–160 ms**. El colchón no baja de ~94 ms porque el objetivo efectivo es buffer de salida + 2 bloques (64 ms) y la deriva solo corrige pasada la banda mínima de 40 ms.
+
+### Pruebas en el Galaxy Y y el PC
+
+| Prueba | Resultado |
+|---|---|
+| ① Instalar ParlanteY Mic junto a la normal; abre y conecta con el PC | [PENDIENTE] |
+| ② Con audífono de 4 polos: la fila dice «audífono» y el nivel sube al hablar | [PENDIENTE] |
+| ③ Voz clara en «CABLE Output» (Windows → Sonido → Grabación → CABLE Output → Escuchar) | [PENDIENTE] |
+| ④ Latencia (aplauso grabado a la vez por un micrófono del PC y por CABLE Output, en Audacity) | [PENDIENTE] |
+| ⑤ 10 min con música hacia el Galaxy Y y micrófono activo: cortes de los dos lados | [PENDIENTE] |
+| ⑥ Discord / OBS / Zoom con «CABLE Output» como micrófono | [PENDIENTE] |
