@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
         Config c = r.config();
         long decod = r.decodPromedioUs();
         long deriva = r.framesDuplicados() - r.framesDescartados() - r.bloquesDescartados() * 1024;
-        // Buffer real del AudioTrack (4 × getMinBufferSize): el piso de la latencia.
+        // Buffer real del AudioTrack (2 × getMinBufferSize): el piso de la latencia.
         long salidaMs = c == null ? 0 : s.capacidadSalidaFrames() * 1000L / c.sampleRate;
         if (c != vConfig || decod / 100 != vDecodUs / 100 || deriva != vDeriva || salidaMs != vSalidaMs) {
             vConfig = c;

@@ -21,8 +21,8 @@ android {
         // targetSdk >= 31, lint exigiría BLUETOOTH_CONNECT y permisos en runtime, que no
         // existen en API 9. La app no se publica en Play.
         targetSdk = 10
-        versionCode = 5
-        versionName = "0.4.1"
+        versionCode = 15
+        versionName = "0.5.8"
     }
 
     buildFeatures {

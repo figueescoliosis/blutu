@@ -36,6 +36,7 @@ parlantey/
 ```
 Un solo build Gradle multi-módulo. Paquetes: `cl.parlantey.core`, `cl.parlantey.receptor`, `cl.parlantey.emisor`, `cl.parlantey.pc`.
 - `pc` (agregado a pedido del usuario): manda al Galaxy Y lo que suena en el PC (WASAPI loopback) por Bluetooth (Winsock `AF_BTH`), con el mismo protocolo y el mismo `FlujoEmisor`/`ControlCola` en vivo. Se empaqueta como `ParlanteY.exe` (jpackage, con su propio Java) en el job de Windows del workflow de release.
+- Cámara web (agregada a pedido del usuario, receptor 0.5.0): `CamaraActivity`, segundo ícono del APK del receptor. Cámara trasera → JPEG → MJPEG por HTTP (Wi-Fi, puerto 8080); en el PC, OBS la toma y la publica como «OBS Virtual Camera». Mismas reglas del receptor. Detalles y pasos de OBS en `NOTAS.md`.
 
 ## Reglas duras
 
@@ -98,7 +99,7 @@ Un solo build Gradle multi-módulo. Paquetes: `cl.parlantey.core`, `cl.parlantey
 - Si el Bluetooth está apagado, pedir encenderlo (`ACTION_REQUEST_ENABLE`).
 - Servicio en primer plano + `PARTIAL_WAKE_LOCK` mientras haya conexión (sigue sonando con la pantalla apagada).
 - Hilo de red: `accept()` → leer tramas → cola acotada de bloques (pool preasignado para `capacidadBufferMs` = 4000).
-- Hilo de audio: decodifica → `AudioTrack` (`MODE_STREAM`, `STREAM_MUSIC`, buffer = 4 × `getMinBufferSize`). Arranca con ≥ 70 % del buffer objetivo; si se vacía, escribe silencio, cuenta un corte y vuelve a llenar.
+- Hilo de audio: decodifica → `AudioTrack` (`MODE_STREAM`, `STREAM_MUSIC`, buffer = 2 × `getMinBufferSize`; era 4 × hasta la 0.4.1, cambiado a pedido del usuario el 2026-10-27 para bajar la latencia en vivo). Arranca con ≥ 70 % del buffer objetivo; si se vacía, escribe silencio, cuenta un corte y vuelve a llenar.
 - `bufferMs` = bloques en cola × ms por bloque + (frames escritos − `getPlaybackHeadPosition()`) en ms.
 - Volumen con las teclas físicas: `setVolumeControlStream(AudioManager.STREAM_MUSIC)`.
 - UI: estado (esperando / conectado a X / reproduciendo), título y artista, barra de buffer, cortes, preset y botón **Hacer visible** (`ACTION_REQUEST_DISCOVERABLE`, 300 s) para vincular.

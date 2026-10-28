@@ -48,4 +48,20 @@
     <string name="boton_detener">Detener receptor</string>
     <string name="notificacion_toca">Toca para abrir</string>
     <string name="ayuda">Para vincular: Hacer visible y, en el emisor, Ajustes → Bluetooth → vincular. Sigue sonando con la pantalla apagada.</string>
+
+    <string name="camara_app">ParlanteY Cámara</string>
+    <string name="camara_direccion">http://%1$s:%2$d/</string>
+    <string name="camara_sin_wifi">Conecta el Wi-Fi</string>
+    <!-- «12 fps · JPEG 45,3 ms · 9 KB/cuadro · 108 KB/s · clientes 1» -->
+    <string name="camara_medicion">%1$d fps\nJPEG %2$s ms\n%3$d KB/cuadro\n%4$d KB/s\nclientes %5$d</string>
+    <!-- «cámara 15 fps (15–15)»: lo que entrega la cámara y el rango pedido. -->
+    <string name="camara_fps_camara">cámara %1$d fps (%2$s)</string>
+    <string name="camara_declarados">declara: %1$s</string>
+    <string name="camara_rechazado">La cámara rechazó %1$d×%2$d</string>
+    <string name="camara_sin_escena">sin escena deportes</string>
+    <string name="camara_tamano">%1$d×%2$d</string>
+    <string name="camara_sin_camara">Este teléfono no tiene cámara trasera</string>
+    <string name="camara_ocupada">La cámara está ocupada por otra app</string>
+    <string name="camara_error">Error de cámara: %1$s</string>
+    <string name="camara_error_puerto">No se pudo abrir el puerto %1$d: %2$s</string>
 </resources>

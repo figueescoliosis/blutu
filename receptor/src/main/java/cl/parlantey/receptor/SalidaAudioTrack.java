@@ -9,12 +9,16 @@ import cl.parlantey.core.Salida;
 
 /**
  * {@link Salida} sobre AudioTrack (MODE_STREAM, STREAM_MUSIC, PCM 16 bits) con un buffer de
- * 4 × {@code getMinBufferSize}. Solo la usa el hilo de audio. Sigue el contrato de 2.3 de
+ * 2 × {@code getMinBufferSize}. Solo la usa el hilo de audio. Sigue el contrato de 2.3 de
  * {@link Salida}: vaciar = pause + flush, detener = pause + flush + stop.
  */
 final class SalidaAudioTrack implements Salida {
 
-    static final int FACTOR_BUFFER = 4;
+    /**
+     * 2 desde la 0.4.2 (antes 4): en el Galaxy Y, 4 × son 371 ms a 48 kHz y eran el piso de la
+     * latencia en vivo (NOTAS.md, «Latencia elegible»).
+     */
+    static final int FACTOR_BUFFER = 2;
 
     private Pista pista;
     private int canales;

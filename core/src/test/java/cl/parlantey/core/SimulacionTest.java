@@ -1148,26 +1148,35 @@ public class SimulacionTest {
     }
 
     /**
-     * Con la salida real del Galaxy Y (4 × getMinBufferSize = 371 ms a 48 kHz, NOTAS ⑦), Baja y
-     * Mínima quedan bajo su piso (371 ms + 2 bloques = 413 ms): el receptor sostiene el piso y el
-     * emisor no debe frenarse por debajo de él (en el PC, la captura descartaba y la latencia subía).
+     * Con la salida real del Galaxy Y (NOTAS ⑦: 4 × getMinBufferSize = 371 ms a 48 kHz hasta la
+     * 0.4.1; 2 × = 185 ms desde la 0.4.2), un objetivo bajo el piso (salida + 2 bloques) se sostiene
+     * en el piso, y el emisor no debe frenarse por debajo de él (en el PC, la captura descartaba y
+     * la latencia subía).
      */
     @Test
     public void enVivoConLaSalidaDelGalaxyYNoDescartaEnLaCaptura() throws IOException {
-        long piso = 19 * 1024 * 1000L / 48000; // 17808 frames → 18 bloques + 2 = 20; ver Reproductor.calcularUmbral
-        for (long objetivo : OBJETIVOS_EN_VIVO) {
-            Vivo v = new Vivo(Preset.ALTA, 1.0005, objetivo, 17808);
+        for (int salida : new int[] {17808, 8904}) {
+            for (long objetivo : OBJETIVOS_EN_VIVO) {
+                conLaSalidaDelGalaxyY(salida, objetivo);
+            }
+        }
+    }
+
+    private static void conLaSalidaDelGalaxyY(int salida, long objetivo) throws IOException {
+        long piso = ((salida + 1023) / 1024 + 2) * 1024 * 1000L / 48000; // como Reproductor.calcularUmbral
+        {
+            Vivo v = new Vivo(Preset.ALTA, 1.0005, objetivo, salida);
             v.medirDesdeMs = 60 * 1000;
             v.correr(5 * 60 * 1000);
             Reproductor r = v.s.reproductor;
-            String p = objetivo + " ms: ";
+            String p = objetivo + " ms, salida " + salida + ": ";
             assertEquals(p + "cortes", 0, r.cortes());
             assertEquals(p + "descartado en la captura", 0, v.captura.msDescartados());
             long o = Math.max(objetivo, piso);
             assertTrue(p + "latencia " + v.latenciaMin + "–" + v.latenciaMax,
                     v.latenciaMax < o + Reproductor.bandaDeriva(o) + 100);
-            System.out.printf("En vivo %d ms con la salida del Galaxy Y (371 ms): buffer %d–%d ms, latencia %d–%d ms%n",
-                    objetivo, v.bufferMin, v.bufferMax, v.latenciaMin, v.latenciaMax);
+            System.out.printf("En vivo %d ms con la salida del Galaxy Y (%d ms): buffer %d–%d ms, latencia %d–%d ms%n",
+                    objetivo, salida * 1000 / 48000, v.bufferMin, v.bufferMax, v.latenciaMin, v.latenciaMax);
         }
     }
 

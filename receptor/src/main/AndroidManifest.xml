@@ -5,9 +5,17 @@
     <!-- PARTIAL_WAKE_LOCK mientras hay conexión: sigue sonando con la pantalla apagada. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Cámara web por Wi-Fi (CamaraActivity). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
     <uses-feature
         android:name="android.hardware.bluetooth"
         android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <supports-screens
         android:anyDensity="true"
@@ -27,6 +35,22 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Segundo ícono en el menú: la cámara web. taskAffinity propia para que no se
+             mezcle con la tarea del receptor. -->
+        <activity
+            android:name=".CamaraActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard"
+            android:exported="true"
+            android:label="@string/camara_app"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:taskAffinity="cl.parlantey.receptor.camara">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

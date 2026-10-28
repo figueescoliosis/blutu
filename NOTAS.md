@@ -521,3 +521,47 @@ Pedido del usuario: bajar la latencia PC → Galaxy Y (≈ 0,5–0,7 s).
 **Conclusión:** la latencia bajó de ≈ 580 a **≈ 370–390 ms** sin cortes. Baja y Mínima dan casi lo mismo: las frena el **AudioTrack del Galaxy Y (371 ms = 4 × getMinBufferSize)**, no la reserva. Al subir a Normal en vivo, el buffer no crece mientras siga en la banda (500 ± 150); arrancando en Normal queda en ≈ 580.
 
 **Propuesta, sin aplicar (regla de CLAUDE.md: buffer = 4 × `getMinBufferSize`):** receptor 0.4.2 con 2 × `getMinBufferSize` (≈ 185 ms): piso ≈ 228 ms y latencia esperada ≈ 250 ms en Mínima. Riesgo: menos colchón ante el GC de Dalvik y la CPU ARMv6 → medir cortes en 30 min antes de adoptarlo. Pendiente de aprobación.
+
+## Cámara web por Wi-Fi — receptor 0.5.0 (2026-10-27)
+
+Pedido del usuario: usar el Galaxy Y como cámara web del PC. Elegido: Wi-Fi + OBS (Windows 10 no tiene `MFCreateVirtualCamera`, que es de Windows 11).
+
+**Qué es:** segundo ícono **ParlanteY Cámara** en el mismo APK del receptor (`CamaraActivity` + `ServidorMjpeg`).
+- Cámara trasera (`android.hardware.Camera`, NV21, `setPreviewCallbackWithBuffer` con 2 buffers) → `YuvImage.compressToJpeg` (calidad 85) en un hilo aparte → HTTP en el puerto 8080:
+  - `http://<ip>:8080/video`: MJPEG (`multipart/x-mixed-replace`); cada cliente recibe siempre el cuadro más nuevo (se salta cuadros, no acumula latencia);
+  - `http://<ip>:8080/`: página con el video a pantalla completa (para la fuente Navegador de OBS).
+- Sin clientes no comprime (no gasta CPU). Botón que recorre todos los tamaños de vista previa de la cámara (empieza en 320×240). En pantalla: fps, ms por JPEG, KB/cuadro, KB/s y clientes.
+- La pantalla queda encendida a propósito: en 2.3 la vista previa necesita una superficie visible.
+- No toca el protocolo Bluetooth (sigue v3).
+
+**Verificado en el PC:** lint del receptor sin avisos; `:receptor:verificarApk` OK (107 864 bytes, firma v1); `ServidorMjpeg` probado con curl en la JVM (página, cabeceras multipart, cuadros, 404).
+
+**Usarlo con OBS:**
+1. Galaxy Y y PC en la misma red Wi-Fi. Abrir **ParlanteY Cámara** y anotar la dirección que muestra (`http://192.168.x.x:8080/`).
+2. Probar en el navegador del PC: `http://192.168.x.x:8080/`.
+3. OBS → Fuentes → **+** → **Navegador** → URL `http://192.168.x.x:8080/`, ancho 640, alto 480 (o 320×240). Ajustar la fuente al lienzo (clic derecho → Transformar → Ajustar a pantalla).
+   - Alternativa: fuente **Fuente multimedia** → desmarcar «Archivo local» → Entrada `http://192.168.x.x:8080/video`, Formato de entrada `mpjpeg`.
+4. OBS → **Iniciar cámara virtual**. En Meet / Zoom / Discord / Teams elegir la cámara **OBS Virtual Camera**.
+
+### Pruebas en el Galaxy Y
+
+| Prueba | Resultado |
+|---|---|
+| ① Instalar 0.5.0 sobre 0.4.2: aparecen los dos íconos y el receptor sigue sonando | [PENDIENTE] |
+| ② fps y ms por JPEG en 320×240 | [PENDIENTE] |
+| ③ fps y ms por JPEG en 640×480 | [PENDIENTE] |
+| ④ Latencia (cronómetro en pantalla del PC frente a la cámara) | [PENDIENTE] |
+| ⑤ OBS Virtual Camera visible en Meet o Zoom | [PENDIENTE] |
+
+**Medido con 0.5.0 (2026-10-27, 320×240, desde el PC con curl):** 7,8 fps, 9,5 KB/cuadro, 74 KB/s; JPEG 14,2 ms por cuadro → ni la CPU ni el Wi-Fi limitan: la cámara entrega ≈ 8 fps con su rango por defecto. Con la cámara tapada, los cuadros salen negros (≈ 2 KB).
+**0.5.1:** pide el rango de fps más alto: el Galaxy Y solo ofrece 7–30 y sigue en 8 fps (exposición automática con poca luz).
+**0.5.2:** fuerza la escena «sports» (o «action») si existe, para exposiciones cortas; la pantalla muestra el rango y la escena. [PENDIENTE medir fps e imagen]
+**0.5.3:** JPEG calidad 85; el botón recorre todos los tamaños de vista previa. En el Galaxy Y el botón no cambia nada: la cámara ofrece **un solo tamaño de vista previa, 320×240** (coincide con su grabación de video QVGA). Es el máximo para la cámara web.
+**0.5.4:** JPEG calidad 100; el botón pide a la fuerza 320×240, 640×480, 800×600, 1280×960 y 1600×1200 (aunque la cámara no los declare) y muestra lo que la cámara declara y lo que aceptó. [PENDIENTE: qué tamaños acepta]
+**0.5.5:** sin vista previa visible: el SurfaceView sigue (2.3 lo exige) pero queda tapado por el panel negro con la dirección y la medición.
+**0.5.6:** WifiLock (WIFI_MODE_FULL), hilo JPEG con THREAD_PRIORITY_URGENT_DISPLAY, antiparpadeo 50 Hz si existe y `GET /parametros` con todos los parámetros del driver (`Camera.Parameters.flatten()`). [PENDIENTE: leer /parametros y ajustar]
+**Parámetros del driver (0.5.6, `/parametros`):** `preview-size-values=320x240` (único), `preview-fps-range-values=(7500,30000)`, `preview-frame-rate-values=30,24,15` (venía en 15), escenas `auto,landscape,night,beach,snow,sunset,fireworks,sports,party,candlelight,backlight`, `antibanding-values=auto,50hz,60hz,off` (quedó en `off` pese a pedir 50hz), `focus-mode=fixed`, ISO `auto,100,200,400`, zoom ×2 en 9 pasos.
+**Medido con 0.5.6:** calidad 100 → 59 KB/cuadro; Wi-Fi ping 138–172 ms, ≈ 97 KB/s → **≈ 2 fps**, la red limita.
+**0.5.7 (fluidez):** calidad 50 (≈ 7 KB/cuadro) y `setPreviewFrameRate(30)`. [PENDIENTE medir]
+**Medido con 0.5.7:** 7,8 fps parejos (intervalo 127 ms, peor 132), 5,1 KB/cuadro, 40 KB/s, ping 73–112 ms → fluido; limita la exposición de la cámara. El driver dejó `preview-frame-rate=15` pese a `setPreviewFrameRate(30)`.
+**0.5.8:** después de configurar, prueba por separado `iso=ISO400`, `preview-fps-range=30000,30000` y `preview-frame-rate=30` (cada uno con su `setParameters`; si el driver lo rechaza, sigue lo anterior). [PENDIENTE medir]
