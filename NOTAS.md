@@ -593,3 +593,30 @@ App aparte («ParlanteY Mic», `cl.parlantey.receptor.mic`, ícono verde) que ad
 | ④ Latencia (aplauso grabado a la vez por un micrófono del PC y por CABLE Output, en Audacity) | [PENDIENTE] |
 | ⑤ 10 min con música hacia el Galaxy Y y micrófono activo: cortes de los dos lados | [PENDIENTE] |
 | ⑥ Discord / OBS / Zoom con «CABLE Output» como micrófono | [PENDIENTE] |
+
+## Llamadas del emisor → Galaxy Y — Paso 0: factibilidad (2026-11-02)
+
+Pedido del usuario: oír en el Galaxy Y las llamadas del Samsung emisor.
+
+**Por qué el emisor de hoy no las manda:** la captura de «Todo el audio» (`AudioPlaybackCaptureConfiguration`) solo cubre `USAGE_MEDIA`, `USAGE_GAME` y `USAGE_UNKNOWN`. Android niega a las apps comunes `USAGE_VOICE_COMMUNICATION`, y la llamada celular ni siquiera pasa por el mezclador. Sin root, el único camino es capturar con la identidad de **shell** (la de `adb`), como hace scrcpy.
+
+Plan aprobado (2026-11-02):
+1. **Paso 0:** comprobar con scrcpy si este Samsung entrega el audio de las llamadas a shell. Depende del modelo.
+2. **Paso 1** (solo si el Paso 0 funciona): emisor 0.5.0 con «Incluir llamadas», usando Shizuku (`UserService` con UID shell + `AudioRecord` con la fuente que funcione) y mezcla en la misma `ColaCaptura`.
+
+Las llamadas contestadas **en el PC** ya suenan en el Galaxy Y con ParlanteY PC (WASAPI loopback).
+
+**Cómo probar:**
+- Samsung por USB con depuración USB activada; scrcpy reciente (las fuentes están en `scrcpy --help`, opción `--audio-source`).
+- Sin video: `scrcpy --no-video --audio-source=<fuente>`.
+- Durante cada llamada, anotar si en el PC se oye a la otra persona (O), a mí (Y), a ambos o nada.
+
+| Llamada | `voice-call-downlink` | `voice-call` | `voice-call-uplink` | `output` | `playback` |
+|---|---|---|---|---|---|
+| Celular (red telefónica) | [PENDIENTE] | [PENDIENTE] | [PENDIENTE] | [PENDIENTE] | [PENDIENTE] |
+| WhatsApp | [PENDIENTE] | [PENDIENTE] | [PENDIENTE] | [PENDIENTE] | [PENDIENTE] |
+
+- Modelo y versión de Android del Samsung (Ajustes → Acerca del teléfono): [PENDIENTE]
+- Versión de scrcpy: [PENDIENTE]
+
+`output` es REMOTE_SUBMIX: mientras corre, el Samsung deja de sonar por su parlante. Si ninguna fuente suena en ninguna llamada, este teléfono no lo permite sin root y el Paso 1 no se hace.
